@@ -279,7 +279,10 @@ class SceneRenderer(
         if (inputScreens.size != screens.size || Session.touchActive) return
         // Forward is -Z, so the gaze direction is minus the rotation's third column
         Quat.toMatrix(head, gaze)
-        val yaw = Math.toDegrees(atan2(gaze[8].toDouble(), gaze[10].toDouble())).toFloat()
+        // Measured around the arrangement's own vertical, which tips with it when recentred looking up or down
+        val pitch = Math.toRadians(pitchReferenceDegrees.toDouble())
+        val towardZ = gaze[10] * cos(pitch) - gaze[9] * sin(pitch)
+        val yaw = Math.toDegrees(atan2(gaze[8].toDouble(), towardZ)).toFloat()
         val current = inputScreens.indexOfFirst { it === Session.activeScreen }
         var best = screens.indices.minByOrNull { abs(yaw - screens[it].yawDegrees) } ?: return
         if (current >= 0 && best != current &&
@@ -290,12 +293,16 @@ class SceneRenderer(
         Session.activeScreen = inputScreens[best]
     }
 
-    // Turns a screen to its place around the wearer (about the true vertical, so screens beside each
-    // other stay level) and tips it up or down to face them at the recentred height
-    private fun setScreenModel(screen: Screen) {
+    // Turns a screen to its place in the arrangement, then tips the whole arrangement up or down as one
+    // to face the wearer at the recentred height, so screens side by side stay parallel at any height
+    private fun placeScreen(screen: Screen) {
         Matrix.setIdentityM(model, 0)
-        Matrix.rotateM(model, 0, screen.yawDegrees, 0f, 1f, 0f)
         Matrix.rotateM(model, 0, pitchReferenceDegrees, 1f, 0f, 0f)
+        Matrix.rotateM(model, 0, screen.yawDegrees, 0f, 1f, 0f)
+    }
+
+    private fun setScreenModel(screen: Screen) {
+        placeScreen(screen)
         Matrix.multiplyMM(mvp, 0, viewProjection, 0, model, 0)
     }
 
@@ -324,9 +331,7 @@ class SceneRenderer(
         val u = input.cursorX / input.width
         val y = screen.height / 2f - input.cursorY / input.height * screen.height
         val half = CURSOR_SIZE_PX * screen.height / input.height / 2f
-        Matrix.setIdentityM(model, 0)
-        Matrix.rotateM(model, 0, screen.yawDegrees, 0f, 1f, 0f)
-        Matrix.rotateM(model, 0, pitchReferenceDegrees, 1f, 0f, 0f)
+        placeScreen(screen)
         if (screen.spec.curved) {
             Matrix.rotateM(model, 0, screen.widthDegrees / 2f - u * screen.widthDegrees, 0f, 1f, 0f)
             Matrix.translateM(model, 0, half, y - half, -SCREEN_DISTANCE * 0.995f)
