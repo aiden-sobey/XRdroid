@@ -16,10 +16,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.abs
+import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.math.tan
 
 // Draws each virtual screen as a section of a cylinder around the wearer, so wide layouts wrap around
@@ -41,6 +43,8 @@ class SceneRenderer(
         private const val CURSOR_SIZE_PX = 36f
         // How far past the midpoint the gaze must go before the trackpad switches screens
         private const val SWITCH_HYSTERESIS_DEGREES = 4f
+        // Closest that neighbouring screens' borders may come once tilted towards the wearer
+        private const val MIN_GAP_DEGREES = 1f
         // Mesh vertices: x, y, z, u, v
         private const val MESH_STRIDE = 5 * 4
 
@@ -163,10 +167,14 @@ class SceneRenderer(
     }
 
     val screens = layout.screens.map { Screen(it).apply { place(scale) } }
+    // How far each screen may tilt about its own horizontal axis, which keeps it level as the head turns
+    // to it, before neighbours come too close; any more pitch tilts the whole arrangement
+    private var maxOwnTiltDegrees = maxOwnTilt()
 
     // Rebuilds the screens' geometry at a new size; call on the GL thread
     fun setScale(scale: Float) {
         screens.forEach { it.place(scale) }
+        maxOwnTiltDegrees = maxOwnTilt()
     }
 
     // Set to recentre on where the wearer is looking, up or down included
@@ -280,7 +288,7 @@ class SceneRenderer(
         // Forward is -Z, so the gaze direction is minus the rotation's third column
         Quat.toMatrix(head, gaze)
         // Measured around the arrangement's own vertical, which tips with it when recentred looking up or down
-        val pitch = Math.toRadians(pitchReferenceDegrees.toDouble())
+        val pitch = Math.toRadians((pitchReferenceDegrees - ownTilt()).toDouble())
         val towardZ = gaze[10] * cos(pitch) - gaze[9] * sin(pitch)
         val yaw = Math.toDegrees(atan2(gaze[8].toDouble(), towardZ)).toFloat()
         val current = inputScreens.indexOfFirst { it === Session.activeScreen }
@@ -293,12 +301,56 @@ class SceneRenderer(
         Session.activeScreen = inputScreens[best]
     }
 
-    // Turns a screen to its place in the arrangement, then tips the whole arrangement up or down as one
-    // to face the wearer at the recentred height, so screens side by side stay parallel at any height
+    // Faces the screens towards the wearer at the recentred height: each screen tilts on its own as far as
+    // its neighbours allow, then the whole arrangement tips as one for the rest
     private fun placeScreen(screen: Screen) {
+        val ownTilt = ownTilt()
         Matrix.setIdentityM(model, 0)
-        Matrix.rotateM(model, 0, pitchReferenceDegrees, 1f, 0f, 0f)
+        Matrix.rotateM(model, 0, pitchReferenceDegrees - ownTilt, 1f, 0f, 0f)
         Matrix.rotateM(model, 0, screen.yawDegrees, 0f, 1f, 0f)
+        Matrix.rotateM(model, 0, ownTilt, 1f, 0f, 0f)
+    }
+
+    private fun ownTilt() = pitchReferenceDegrees.coerceIn(-maxOwnTiltDegrees, maxOwnTiltDegrees)
+
+    // Tilting screens that sit side by side brings their top (or bottom) inner corners together, so find
+    // the most tilt that keeps every pair at least MIN_GAP_DEGREES apart
+    private fun maxOwnTilt(): Float {
+        val pairs = screens.sortedBy { it.yawDegrees }.zipWithNext()
+        if (pairs.isEmpty()) return 90f
+        var clear = 0f
+        var blocked = 90f
+        repeat(16) {
+            val tilt = (clear + blocked) / 2f
+            if (pairs.all { (right, left) -> gapDegrees(right, left, tilt) >= MIN_GAP_DEGREES }) clear = tilt else blocked = tilt
+        }
+        Log.i(TAG, "screens tilt up to %.1f° on their own".format(clear))
+        return clear
+    }
+
+    // Angle between two neighbouring screens' facing borders, both tilted, measured either side of the
+    // vertical plane midway between them
+    private fun gapDegrees(right: Screen, left: Screen, tilt: Float): Float {
+        val midYaw = (right.yawDegrees + left.yawDegrees) / 2f
+        // The border strip runs from the screen's left edge (first two vertices) to its right edge (last two)
+        val last = left.borderVertexCount - 2
+        val rightClearance = listOf(0, 1).minOf { clearance(right.borderMesh, it, right.yawDegrees - midYaw, tilt) }
+        val leftClearance = listOf(last, last + 1).minOf { clearance(left.borderMesh, it, left.yawDegrees - midYaw, tilt) }
+        return rightClearance + leftClearance
+    }
+
+    // How far a vertex sits on its own screen's side of the midway plane, in degrees, once the screen is
+    // tilted and turned to its yaw relative to that plane (positive yaw is to the left)
+    private fun clearance(mesh: FloatBuffer, vertex: Int, yawDegrees: Float, tilt: Float): Float {
+        val x = mesh.get(vertex * 5)
+        val y = mesh.get(vertex * 5 + 1)
+        val z = mesh.get(vertex * 5 + 2)
+        val t = Math.toRadians(tilt.toDouble())
+        val r = Math.toRadians(yawDegrees.toDouble())
+        val tiltedZ = y * sin(t) + z * cos(t)
+        val turnedX = x * cos(r) + tiltedZ * sin(r)
+        val side = asin(turnedX / sqrt(x * x + y * y + z * z)) * if (yawDegrees > 0) -1.0 else 1.0
+        return Math.toDegrees(side).toFloat()
     }
 
     private fun setScreenModel(screen: Screen) {
