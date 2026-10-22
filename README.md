@@ -30,6 +30,8 @@ scripts/deploy.sh   # install, open, and show the first log lines (tag XRdroid)
 
 Needs JDK 21 and the Android SDK (compile SDK 36).
 
+For a signed release APK, create `keystore.properties` in the project root (it's ignored by git) with `storeFile`, `storePassword`, `keyAlias` and `keyPassword`, then run `./gradlew assembleRelease`. The APK lands in `app/build/outputs/apk/release/`.
+
 ## Credits
 
 The glasses' USB protocol comes from [viture-v2](https://github.com/elasticjava/viture-v2) (MIT). XRdroid doesn't use the VITURE SDK.

@@ -1,7 +1,8 @@
 #!/bin/bash
 # Installs the debug build and opens XRdroid's phone screen, which starts the screens on the glasses by
 # itself (and again whenever they reconnect), then shows the first log lines.
-# Usage: scripts/deploy.sh [--no-install]. Set ANDROID_SERIAL when more than one device is connected.
+# Usage: scripts/deploy.sh [--no-install]. Set VARIANT=release to install the release build, and
+# ANDROID_SERIAL when more than one device is connected.
 set -euo pipefail
 ADB="${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,7 +10,8 @@ LOG="$ROOT/build/logcat.txt"
 mkdir -p "$ROOT/build"
 
 if [ "${1:-}" != "--no-install" ]; then
-  "$ADB" install -r "$ROOT/app/build/outputs/apk/debug/app-debug.apk" | tail -1
+  VARIANT="${VARIANT:-debug}"
+  "$ADB" install -r "$ROOT/app/build/outputs/apk/$VARIANT/app-$VARIANT.apk" | tail -1
 fi
 
 pkill -f "logcat -v time XRdroid" 2>/dev/null || true
