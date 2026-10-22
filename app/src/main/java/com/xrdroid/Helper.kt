@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.hardware.usb.UsbDevice
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -76,6 +77,10 @@ object Helper {
         return appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName) ==
             AppOpsManager.MODE_ALLOWED
     }
+
+    // Gives this app access to a USB device without a prompt; false if the helper isn't connected
+    fun allowUsb(device: UsbDevice): Boolean =
+        runCatching { service?.allowUsbDevice(device.deviceName) == true }.getOrDefault(false)
 
     fun addListener(listener: () -> Unit) {
         listeners += listener

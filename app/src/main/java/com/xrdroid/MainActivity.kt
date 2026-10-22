@@ -21,6 +21,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import android.view.HapticFeedbackConstants
@@ -32,12 +33,15 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
+import androidx.lifecycle.Lifecycle
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.divider.MaterialDivider
 import rikka.shizuku.Shizuku
 import kotlin.concurrent.thread
@@ -60,6 +64,8 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_BACKGROUND_PX = 2560
         private const val THUMBNAIL_PX = 200
         private const val SETUP_POLL_MS = 1500L
+        // The glasses' display normally starts within a second or two of their USB connection
+        private const val REPLUG_AFTER_MS = 4000L
     }
 
     // One row of the Setup card
@@ -87,6 +93,10 @@ class MainActivity : AppCompatActivity() {
     }
     private val handler = Handler(Looper.getMainLooper())
     private var launchedOnDisplay = -1
+    // When the glasses appeared on USB without their display, or 0
+    private var displayMissingSince = 0L
+    private var replugPrompt: AlertDialog? = null
+    private var replugPromptDismissed = false
     private val helperListener: () -> Unit = {
         refreshSetup()
         scheduleStart()
@@ -108,11 +118,8 @@ class MainActivity : AppCompatActivity() {
     private val shizukuDeadListener = Shizuku.OnBinderDeadListener { runOnUiThread { refreshSetup() } }
     private val shizukuPermissionListener = Shizuku.OnRequestPermissionResultListener { _, _ -> runOnUiThread { refreshSetup() } }
     private val usbPermissionReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            refreshSetup()
-            // Restart the screens so head tracking picks up the new access
-            if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && Session.running) rebuildScreens()
-        }
+        // Head tracking keeps retrying, so it picks up the new access by itself
+        override fun onReceive(context: Context, intent: Intent) = refreshSetup()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -329,8 +336,29 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshSetup() {
         val glassesConnected = glassesDisplay() != null
-        connection.text = if (glassesConnected) "Glasses connected" else "No glasses"
-        val dotColor = ContextCompat.getColor(this, if (glassesConnected) R.color.good else R.color.text_muted)
+        val glassesUsb = usbManager.deviceList.values.firstOrNull { it.vendorId == VitureImu.VITURE_VENDOR_ID }
+        // Sometimes the glasses connect over USB but their display never starts, and only replugging them
+        // brings it up
+        val now = SystemClock.uptimeMillis()
+        if (glassesUsb == null || glassesConnected) {
+            displayMissingSince = 0L
+            replugPromptDismissed = false
+        } else if (displayMissingSince == 0L) {
+            displayMissingSince = now
+        }
+        val needsReplug = displayMissingSince != 0L && now - displayMissingSince >= REPLUG_AFTER_MS
+        showReplugPrompt(needsReplug)
+
+        connection.text = when {
+            glassesConnected -> "Glasses connected"
+            needsReplug -> "Replug glasses"
+            else -> "No glasses"
+        }
+        val dotColor = ContextCompat.getColor(this, when {
+            glassesConnected -> R.color.good
+            needsReplug -> R.color.attention
+            else -> R.color.text_muted
+        })
         connection.setCompoundDrawablesRelativeWithIntrinsicBounds(GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(dotColor)
@@ -355,10 +383,15 @@ class MainActivity : AppCompatActivity() {
             Helper.service == null -> show(shizukuCheck, "Screens and trackpad", "Starting the helper...", ok = false)
             else -> show(shizukuCheck, "Screens and trackpad", "Shizuku is running and allowed", ok = true)
         }
-        hint.text = getString(if (Helper.service != null) R.string.trackpad_hint else R.string.trackpad_hint_setup)
+        hint.text = getString(when {
+            Helper.service == null -> R.string.trackpad_hint_setup
+            needsReplug -> R.string.trackpad_hint_replug
+            else -> R.string.trackpad_hint
+        })
 
-        // Head tracking reads the glasses' motion sensor over USB
-        val glassesUsb = usbManager.deviceList.values.firstOrNull { it.vendorId == VitureImu.VITURE_VENDOR_ID }
+        // Head tracking reads the glasses' motion sensor over USB. Android forgets access whenever they're
+        // unplugged; the helper grants it again without a prompt.
+        if (glassesUsb != null && !usbManager.hasPermission(glassesUsb)) Helper.allowUsb(glassesUsb)
         when {
             glassesUsb == null -> show(headTrackingCheck, "Head tracking", "Connect your VITURE glasses", ok = false)
             !usbManager.hasPermission(glassesUsb) -> show(headTrackingCheck, "Head tracking", "Allow access to the glasses' motion sensor", ok = false, "Allow") {
@@ -366,6 +399,22 @@ class MainActivity : AppCompatActivity() {
             }
             else -> show(headTrackingCheck, "Head tracking", "Reading the glasses' motion sensor", ok = true)
         }
+    }
+
+    // Shown once each time it happens, and closed by itself once the display starts
+    private fun showReplugPrompt(needed: Boolean) {
+        if (!needed) {
+            replugPrompt?.dismiss()
+            replugPrompt = null
+            return
+        }
+        if (replugPrompt != null || replugPromptDismissed || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+        replugPrompt = MaterialAlertDialogBuilder(this)
+            .setTitle("Replug your glasses")
+            .setMessage("Your glasses are connected, but their display hasn't started. Unplug them from the phone and plug them back in.")
+            .setPositiveButton("OK") { _, _ -> replugPromptDismissed = true }
+            .setOnCancelListener { replugPromptDismissed = true }
+            .show()
     }
 
     private fun show(check: Check, title: String, detail: String, ok: Boolean, actionLabel: String? = null, action: (() -> Unit)? = null) {

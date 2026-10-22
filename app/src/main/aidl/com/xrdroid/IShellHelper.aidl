@@ -24,4 +24,7 @@ interface IShellHelper {
 
     // Gives this app usage access, which ranks the dock's apps; returns whether it was granted
     boolean allowUsageAccess() = 6;
+
+    // Gives this app access to a USB device (by its device name), as the "Allow" prompt would
+    boolean allowUsbDevice(String deviceName) = 7;
 }

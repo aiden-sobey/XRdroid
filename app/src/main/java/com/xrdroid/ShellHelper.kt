@@ -5,6 +5,9 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import android.os.Binder
 import android.os.Build
 import android.os.SystemClock
 import android.view.InputDevice
@@ -50,6 +53,7 @@ class ShellHelper(context: Context) : IShellHelper.Stub() {
         .newInstance(ShellContext(context))
     private val displays = mutableMapOf<Int, VirtualDisplay>()
     private val appPackage = context.packageName
+    private val usbManager = context.getSystemService(UsbManager::class.java)
 
     // Input injection is hidden API: InputManagerGlobal.injectInputEvent, and InputEvent.setDisplayId to
     // aim each event at a spatial screen. The shell user holds INJECT_EVENTS.
@@ -85,6 +89,15 @@ class ShellHelper(context: Context) : IShellHelper.Stub() {
     override fun allowUsageAccess(): Boolean {
         val command = listOf("appops", "set", appPackage, "GET_USAGE_STATS", "allow")
         return ProcessBuilder(command).redirectErrorStream(true).start().waitFor() == 0
+    }
+
+    // UsbManager.grantPermission(device, uid) is hidden; the shell user holds MANAGE_USB
+    override fun allowUsbDevice(deviceName: String): Boolean {
+        val device = usbManager.deviceList[deviceName] ?: return false
+        val callerUid = Binder.getCallingUid()
+        UsbManager::class.java.getMethod("grantPermission", UsbDevice::class.java, Int::class.javaPrimitiveType)
+            .invoke(usbManager, device, callerUid)
+        return true
     }
 
     override fun injectMotion(event: MotionEvent, displayId: Int) {

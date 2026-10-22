@@ -7,6 +7,8 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -37,6 +39,8 @@ class VitureImu(private val context: Context) {
         private const val MAX_CONSECUTIVE_FAILURES = 40
         // Light low-pass on the differentiated rate; prediction turns rate noise into a restless image
         private const val RATE_SMOOTHING = 0.35f
+        // The glasses' display comes up before their motion sensor does, so keep looking for it
+        private const val RETRY_MS = 500L
     }
 
     // A head orientation [w, x, y, z] and when it arrived (System.nanoTime)
@@ -53,29 +57,56 @@ class VitureImu(private val context: Context) {
 
     @Volatile private var running = false
     private var readerThread: Thread? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private var wanted = false
+    private var onStatus: (String) -> Unit = {}
+    @Volatile private var lastStatus: String? = null
+
+    // Keeps trying until the stream starts, and starts it again if it stops while still wanted
+    private val connect = object : Runnable {
+        override fun run() {
+            if (wanted && !running && !tryOpen()) handler.postDelayed(this, RETRY_MS)
+        }
+    }
 
     fun start(onStatus: (String) -> Unit) {
-        val usbManager = context.getSystemService(UsbManager::class.java)
-        val device = usbManager.deviceList.values.firstOrNull { it.vendorId == VITURE_VENDOR_ID }
-        if (device == null) {
-            onStatus("VITURE glasses not found on USB")
-            return
-        }
-        // Access is granted from the phone screen; a prompt raised from here would appear in the glasses
-        if (!usbManager.hasPermission(device)) {
-            onStatus("USB access to the glasses hasn't been allowed yet")
-            return
-        }
-        open(usbManager, device, onStatus)
+        this.onStatus = onStatus
+        wanted = true
+        handler.post(connect)
     }
 
     fun stop() {
+        wanted = false
+        handler.removeCallbacks(connect)
         running = false
         readerThread?.join(500)
         readerThread = null
     }
 
-    private fun open(usbManager: UsbManager, device: UsbDevice, onStatus: (String) -> Unit) {
+    // Repeats are dropped, since a missing sensor is reported on every retry
+    private fun report(status: String) {
+        if (status == lastStatus) return
+        lastStatus = status
+        onStatus(status)
+    }
+
+    private fun tryOpen(): Boolean {
+        val usbManager = context.getSystemService(UsbManager::class.java)
+        val device = usbManager.deviceList.values.firstOrNull { it.vendorId == VITURE_VENDOR_ID }
+        if (device == null) {
+            report("waiting for the glasses' motion sensor on USB")
+            return false
+        }
+        // Android forgets access whenever the glasses are unplugged. The helper grants it without a prompt,
+        // which from here would appear in the glasses; otherwise it's granted from the phone screen.
+        if (!usbManager.hasPermission(device) && !(Helper.allowUsb(device) && usbManager.hasPermission(device))) {
+            report("USB access to the glasses hasn't been allowed yet")
+            return false
+        }
+        return open(usbManager, device)
+    }
+
+    private fun open(usbManager: UsbManager, device: UsbDevice): Boolean {
         val usbInterface = (0 until device.interfaceCount).map { device.getInterface(it) }
             .firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_HID } ?: device.getInterface(0)
         val endpoints = (0 until usbInterface.endpointCount).map { usbInterface.getEndpoint(it) }
@@ -85,29 +116,33 @@ class VitureImu(private val context: Context) {
         // Forcing the claim detaches the kernel HID driver from the interface
         if (input == null || output == null || connection == null || !connection.claimInterface(usbInterface, true)) {
             connection?.close()
-            onStatus("could not open the glasses' USB interface (is SpaceWalker using it?)")
-            return
+            report("could not open the glasses' USB interface (is SpaceWalker using it?)")
+            return false
         }
 
         running = true
-        readerThread = Thread({ readLoop(connection, usbInterface, input, output, onStatus) }, "VitureImu").apply {
+        readerThread = Thread({
+            readLoop(connection, usbInterface, input, output)
+            running = false
+            handler.postDelayed(connect, RETRY_MS)
+        }, "VitureImu").apply {
             priority = Thread.MAX_PRIORITY
             start()
         }
+        return true
     }
 
     private fun readLoop(
         connection: UsbDeviceConnection,
         usbInterface: UsbInterface,
         input: UsbEndpoint,
-        output: UsbEndpoint,
-        onStatus: (String) -> Unit
+        output: UsbEndpoint
     ) {
         val buffer = ByteArray(64)
         if (!startStream(connection, input, output, buffer)) {
-            onStatus("glasses did not start the head-tracking stream")
+            report("glasses did not start the head-tracking stream")
         } else {
-            onStatus("head tracking started")
+            report("head tracking started")
             var previous: FloatArray? = null
             var previousNanos = 0L
             var sampleInterval = 1f / 240f
@@ -116,7 +151,7 @@ class VitureImu(private val context: Context) {
                 val length = connection.bulkTransfer(input, buffer, buffer.size, READ_TIMEOUT_MS)
                 if (length <= 0) {
                     if (++failures > MAX_CONSECUTIVE_FAILURES) {
-                        onStatus("head tracking stopped responding")
+                        report("head tracking stopped responding")
                         break
                     }
                     continue
