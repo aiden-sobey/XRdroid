@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A pair of glasses, inside the adaptive icon's 66dp safe zone -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Lenses -->
+    <path
+        android:fillColor="#9B8CFF"
+        android:pathData="M32,44 H44 A6,6 0 0 1 50,50 V55 A8,8 0 0 1 42,63 H34 A8,8 0 0 1 26,55 V50 A6,6 0 0 1 32,44 Z M64,44 H76 A6,6 0 0 1 82,50 V55 A8,8 0 0 1 74,63 H66 A8,8 0 0 1 58,55 V50 A6,6 0 0 1 64,44 Z"
+        android:strokeColor="#F4F2FF"
+        android:strokeLineJoin="round"
+        android:strokeWidth="3.5" />
+    <!-- Bridge and arms -->
+    <path
+        android:pathData="M50,49 Q54,45 58,49 M26,48 L21,45.5 M82,48 L87,45.5"
+        android:strokeColor="#F4F2FF"
+        android:strokeLineCap="round"
+        android:strokeWidth="3.5" />
+    <!-- Glare on each lens -->
+    <path
+        android:pathData="M32,50 L37,50 M64,50 L69,50"
+        android:strokeAlpha="0.6"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="2.5" />
+</vector>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">XRdroid</string>
+    <string name="trackpad_hint">Move with one finger, tap to click\nScroll with two fingers\nHold, then move, to drag</string>
+    <string name="trackpad_hint_setup">Finish setup in Settings to start the screens</string>
+</resources>
