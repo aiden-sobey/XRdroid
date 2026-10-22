@@ -49,6 +49,7 @@ class ShellHelper(context: Context) : IShellHelper.Stub() {
     private val displayManager = DisplayManager::class.java.getDeclaredConstructor(Context::class.java)
         .newInstance(ShellContext(context))
     private val displays = mutableMapOf<Int, VirtualDisplay>()
+    private val appPackage = context.packageName
 
     // Input injection is hidden API: InputManagerGlobal.injectInputEvent, and InputEvent.setDisplayId to
     // aim each event at a spatial screen. The shell user holds INJECT_EVENTS.
@@ -78,6 +79,11 @@ class ShellHelper(context: Context) : IShellHelper.Stub() {
     // view doesn't (the trackpad on the phone does), so the shell user launches it fullscreen instead
     override fun launchFullscreen(component: String, displayId: Int): Boolean {
         val command = listOf("am", "start", "--display", displayId.toString(), "--windowingMode", "1", "-n", component)
+        return ProcessBuilder(command).redirectErrorStream(true).start().waitFor() == 0
+    }
+
+    override fun allowUsageAccess(): Boolean {
+        val command = listOf("appops", "set", appPackage, "GET_USAGE_STATS", "allow")
         return ProcessBuilder(command).redirectErrorStream(true).start().waitFor() == 0
     }
 

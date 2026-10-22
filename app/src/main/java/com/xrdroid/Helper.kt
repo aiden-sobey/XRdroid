@@ -1,5 +1,6 @@
 package com.xrdroid
 
+import android.app.AppOpsManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.ServiceConnection
@@ -7,7 +8,10 @@ import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.Process
+import android.util.Log
 import rikka.shizuku.Shizuku
+import kotlin.concurrent.thread
 
 // The app's one connection to ShellHelper, which Shizuku runs as the shell user. It creates the spatial
 // screens, launches the glasses view fullscreen and delivers the trackpad's touches. Once started, it
@@ -25,8 +29,16 @@ object Helper {
     private val connection = object : ServiceConnection {
         // Shizuku repeats this whenever another connection binds, so listeners must cope with repeats
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            service = binder?.let { IShellHelper.Stub.asInterface(it) }
-            notifyListeners()
+            val helper = binder?.let { IShellHelper.Stub.asInterface(it) }
+            service = helper
+            // Usage access first, so home screens opened once listeners hear about it can rank the dock
+            thread(name = "UsageAccess") {
+                if (helper != null && !hasUsageAccess()) {
+                    val granted = runCatching { helper.allowUsageAccess() }.getOrDefault(false)
+                    Log.i("XRdroid", "Usage access granted through the helper: $granted")
+                }
+                notifyListeners()
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -55,6 +67,14 @@ object Helper {
             Shizuku.addRequestPermissionResultListener { _, _ -> mainHandler.post { connect() } }
         }
         connect()
+    }
+
+    // Whether this app may read app usage, which ranks the dock's apps
+    fun hasUsageAccess(): Boolean {
+        val context = appContext ?: return false
+        val appOps = context.getSystemService(AppOpsManager::class.java)
+        return appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName) ==
+            AppOpsManager.MODE_ALLOWED
     }
 
     fun addListener(listener: () -> Unit) {

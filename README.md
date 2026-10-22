@@ -19,6 +19,7 @@ App screens that stay fixed in space around you, for VITURE glasses on an Androi
 - **Remote tab:** move with one finger and tap to click. Scroll with two fingers. Hold, then move, to drag. Back and Home act on the screen you're looking at.
 - **Recenter** puts the screens back in front of you. **− / +** pushes them back or brings them closer.
 - **Settings tab:** pick a layout (one screen, two screens, or one curved ultrawide) and a home background.
+- **Dock:** shows your most-used apps until you add or remove one (long-press an app). XRdroid turns on usage access for itself through Shizuku to rank them.
 
 ## Building
 

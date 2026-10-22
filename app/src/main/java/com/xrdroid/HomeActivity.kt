@@ -1,6 +1,7 @@
 package com.xrdroid
 
 import android.app.ActivityOptions
+import android.content.ComponentName
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Build
@@ -43,6 +44,7 @@ class HomeActivity : AppCompatActivity() {
     private lateinit var scrim: View
     private val adapter = AppAdapter()
     private var apps: List<InstalledApp> = emptyList()
+    private var dockApps: List<ComponentName> = emptyList()
 
     private val displayIdCompat: Int
         get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display!!.displayId else windowManager.defaultDisplay.displayId
@@ -77,9 +79,10 @@ class HomeActivity : AppCompatActivity() {
         Session.homes[displayIdCompat] = WeakReference(this)
         thread(name = "InstalledApps") {
             val loaded = InstalledApps.load(this)
+            val dock = Dock.load(this, loaded)
             runOnUiThread {
                 apps = loaded
-                refreshDock()
+                showDock(dock)
                 filter()
             }
         }
@@ -144,11 +147,12 @@ class HomeActivity : AppCompatActivity() {
         }
     }
 
-    // Rebuilds the dock from the saved favourites, followed by the All apps button
-    private fun refreshDock() {
+    // Rebuilds the dock, followed by the All apps button
+    private fun showDock(components: List<ComponentName>) {
+        dockApps = components
         dock.removeAllViews()
         val size = dp(DOCK_ICON_DP)
-        for (component in Dock.load(this, apps)) {
+        for (component in components) {
             val app = apps.firstOrNull { it.component == component } ?: continue
             dock.addView(dockButton(app.label) {
                 // Its own copy, since the drawer shows the same icon
@@ -184,8 +188,7 @@ class HomeActivity : AppCompatActivity() {
     private fun showDockMenu(anchor: View, app: InstalledApp) {
         PopupMenu(this, anchor).apply {
             menu.add("Remove from dock").setOnMenuItemClickListener {
-                Dock.remove(this@HomeActivity, apps, app.component)
-                refreshAllDocks()
+                changeDock(dockApps - app.component)
                 true
             }
             show()
@@ -193,21 +196,20 @@ class HomeActivity : AppCompatActivity() {
     }
 
     private fun showDrawerMenu(anchor: View, app: InstalledApp) {
-        val inDock = app.component in Dock.load(this, apps)
+        val inDock = app.component in dockApps
         PopupMenu(this, anchor).apply {
             menu.add(if (inDock) "Remove from dock" else "Add to dock").setOnMenuItemClickListener {
-                if (inDock) Dock.remove(this@HomeActivity, apps, app.component)
-                else Dock.add(this@HomeActivity, apps, app.component)
-                refreshAllDocks()
+                changeDock(if (inDock) dockApps - app.component else dockApps + app.component)
                 true
             }
             show()
         }
     }
 
-    // Every spatial screen shows the same dock
-    private fun refreshAllDocks() {
-        Session.homes.values.mapNotNull { it.get() }.forEach { it.refreshDock() }
+    // Saves the wearer's choice and shows it on every spatial screen
+    private fun changeDock(components: List<ComponentName>) {
+        Dock.save(this, components)
+        Session.homes.values.mapNotNull { it.get() }.forEach { it.showDock(components) }
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()

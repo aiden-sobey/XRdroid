@@ -21,4 +21,7 @@ interface IShellHelper {
 
     // Presses and releases a key (e.g. Back) on a display
     oneway void injectKey(int keyCode, int displayId) = 5;
+
+    // Gives this app usage access, which ranks the dock's apps; returns whether it was granted
+    boolean allowUsageAccess() = 6;
 }
