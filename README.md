@@ -32,3 +32,7 @@ Needs JDK 21 and the Android SDK (compile SDK 36).
 ## Credits
 
 The glasses' USB protocol comes from [viture-v2](https://github.com/elasticjava/viture-v2) (MIT). XRdroid doesn't use the VITURE SDK.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
