@@ -31,6 +31,7 @@ import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -53,6 +54,7 @@ import kotlin.concurrent.thread
 class MainActivity : AppCompatActivity() {
 
     companion object {
+        private const val TAG = "XRdroid"
         private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
         private const val SHIZUKU_PERMISSION_REQUEST = 7302
         private const val ACTION_USB_PERMISSION = "com.xrdroid.CONTROL_USB_PERMISSION"
@@ -85,10 +87,15 @@ class MainActivity : AppCompatActivity() {
     private val layoutCards = mutableListOf<Pair<ScreenLayout, MaterialCardView>>()
     private val backgroundItems = mutableListOf<Pair<HomeBackground, View>>()
     private val pickPhoto = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        // Null when the picker was closed, or couldn't fetch the photo itself
+        Log.i(TAG, "Photo picker returned ${uri ?: "nothing"}")
         if (uri == null) return@registerForActivityResult
         thread(name = "HomeBackground") {
             val saved = savePhoto(uri)
-            runOnUiThread { if (saved) chooseBackground(HomeBackground.PHOTO) }
+            runOnUiThread {
+                if (saved) chooseBackground(HomeBackground.PHOTO)
+                else Toast.makeText(this, "Couldn't use that photo", Toast.LENGTH_LONG).show()
+            }
         }
     }
     private val handler = Handler(Looper.getMainLooper())
@@ -302,7 +309,7 @@ class MainActivity : AppCompatActivity() {
         HomeBackground.photoFile(this).outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
         true
     } catch (e: Exception) {
-        Log.e("XRdroid", "Could not save the background photo", e)
+        Log.e(TAG, "Could not save the background photo from $uri", e)
         false
     }
 
