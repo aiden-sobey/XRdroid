@@ -70,17 +70,22 @@ class VitureImu(private val context: Context) {
     }
 
     fun start(onStatus: (String) -> Unit) {
+        if (wanted) return
         this.onStatus = onStatus
+        lastStatus = null
         wanted = true
         handler.post(connect)
     }
 
+    // Also forgets the last pose, so a restart waits for a fresh one rather than using a stale one
     fun stop() {
         wanted = false
         handler.removeCallbacks(connect)
         running = false
         readerThread?.join(500)
         readerThread = null
+        latest = null
+        angularRate = floatArrayOf(0f, 0f, 0f)
     }
 
     // Repeats are dropped, since a missing sensor is reported on every retry

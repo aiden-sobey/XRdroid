@@ -69,7 +69,12 @@ class GlassesActivity : Activity() {
         }
         Session.onRecenterRequested = { renderer.recenterRequested = true }
         Session.onScaleChanged = { scale -> glView.queueEvent { renderer.setScale(scale) } }
-        Session.onFixedChanged = { fixed -> glView.queueEvent { renderer.setFixed(fixed && layout.screens.size == 1) } }
+        Session.onFixedChanged = { fixed ->
+            val fixedScreen = fixed && layout.screens.size == 1
+            // Called on the main thread; tracking restarts before the renderer asks to recentre on it
+            trackHead(!fixedScreen)
+            glView.queueEvent { renderer.setFixed(fixedScreen) }
+        }
         glView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
             preserveEGLContextOnPause = true
@@ -88,7 +93,13 @@ class GlassesActivity : Activity() {
         }
         // Exported so adb can send recentre and tuning commands
         ContextCompat.registerReceiver(this, controlReceiver, filter, ContextCompat.RECEIVER_EXPORTED)
-        imu.start { status -> Log.i(TAG, "Head tracking: $status") }
+        trackHead(!ScreenLayout.isFixed(this, layout))
+    }
+
+    // A fixed screen ignores the head, so the motion sensor is left off to save power on the phone and glasses
+    private fun trackHead(on: Boolean) {
+        if (on) imu.start { status -> Log.i(TAG, "Head tracking: $status") } else imu.stop()
+        Log.i(TAG, "Head tracking ${if (on) "on" else "off for a fixed screen"}")
     }
 
     private fun createScreens(surfaces: List<Surface>) {
