@@ -57,7 +57,10 @@ class SceneRenderer(
         private const val GLOW_STRENGTH = 0.22f
         private const val GLOW_FALLOFF_PX = 14f
         // Span of the cursor's dot of light and the glow and shade around it, in screen pixels
-        private const val DOT_SIZE_PX = 34f
+        private const val DOT_SIZE_PX = 39f
+        // On a click the dot flashes violet and swells, fading back over this long
+        private const val PULSE_NANOS = 300_000_000L
+        private const val PULSE_GROWTH = 0.4f
         // How far past the edge of the screen with the trackpad the gaze must go before it switches screens
         private const val SWITCH_HYSTERESIS_DEGREES = 3f
         // Closest that neighbouring screens' borders may come once tilted towards the wearer
@@ -125,16 +128,19 @@ class SceneRenderer(
             }
         """
         // The cursor: a bright dot with a soft violet glow, over a faint shade that dims what's underneath so
-        // the dot still shows on a white page. Premultiplied.
+        // the dot still shows on a white page. uPulse (1 just after a click, fading to 0) turns it the phone
+        // app's violet and brightens the glow. Premultiplied.
         private const val DOT_FRAGMENT_SHADER = """
             precision mediump float;
+            uniform float uPulse;
             varying vec2 vTexCoord;
             void main() {
                 float r = length(vTexCoord - 0.5) * 2.0;
                 float core = 1.0 - smoothstep(0.26, 0.36, r);
-                float glow = 0.55 * exp(-r * r * 7.0) * (1.0 - smoothstep(0.8, 1.0, r));
+                float glow = (0.55 + 0.35 * uPulse) * exp(-r * r * 7.0) * (1.0 - smoothstep(0.8, 1.0, r));
                 float shade = 0.4 * (1.0 - smoothstep(0.45, 1.0, r));
-                vec3 light = vec3(1.0) * core + vec3(0.78, 0.74, 1.0) * glow * (1.0 - core);
+                vec3 violet = vec3(0.61, 0.55, 1.0);
+                vec3 light = mix(vec3(1.0), violet, uPulse) * core + mix(vec3(0.78, 0.74, 1.0), violet, uPulse) * glow * (1.0 - core);
                 gl_FragColor = vec4(light, max(core, shade));
             }
         """
@@ -524,7 +530,10 @@ class SceneRenderer(
     private fun drawCursor(screen: Screen, input: Session.Screen) {
         val u = input.cursorX / input.width
         val y = screen.height / 2f - input.cursorY / input.height * screen.height
-        val half = DOT_SIZE_PX * screen.height / input.height / 2f
+        // Eases out from a click
+        val sinceClick = (System.nanoTime() - Session.clickNanos).toFloat() / PULSE_NANOS
+        val pulse = if (sinceClick in 0f..1f) (1f - sinceClick) * (1f - sinceClick) else 0f
+        val half = DOT_SIZE_PX * screen.height / input.height / 2f * (1f + PULSE_GROWTH * pulse)
         // Centred on the cursor, and tilted as the screen's mesh is
         placeScreen(screen)
         if (screen.spec.curved) {
@@ -543,6 +552,7 @@ class SceneRenderer(
         GLES20.glUseProgram(dotProgram)
         GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(dotProgram, "uMvp"), 1, false, mvp, 0)
         GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(dotProgram, "uTexMatrix"), 1, false, IDENTITY, 0)
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(dotProgram, "uPulse"), pulse)
         val position = GLES20.glGetAttribLocation(dotProgram, "aPosition")
         val texCoord = GLES20.glGetAttribLocation(dotProgram, "aTexCoord")
         quadBuffer.position(0)

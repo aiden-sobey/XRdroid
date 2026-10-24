@@ -60,6 +60,7 @@ class TrackpadGestures(private val view: View) : View.OnTouchListener {
         val target = screen ?: return@Runnable
         val holdMs = ViewConfiguration.getLongPressTimeout() + LONG_PRESS_MARGIN_MS
         finger.down(target.displayId, target.cursorX, target.cursorY, holdMs)
+        Session.clickNanos = System.nanoTime()
         isDragging = true
         handler.postDelayed(pickedUpRunnable, holdMs)
     }
@@ -136,6 +137,7 @@ class TrackpadGestures(private val view: View) : View.OnTouchListener {
                 val target = screen
                 if (!moved && SystemClock.uptimeMillis() - downTime < TAP_MAX_MS && target != null) {
                     finger.tap(target.displayId, target.cursorX, target.cursorY)
+                    Session.clickNanos = System.nanoTime()
                 } else if (isDragging || isScrolling) {
                     finger.up()
                 }
@@ -172,6 +174,7 @@ class TrackpadGestures(private val view: View) : View.OnTouchListener {
                     touchX = it.cursorX
                     touchY = it.cursorY
                     finger.down(it.displayId, touchX, touchY)
+                    Session.clickNanos = System.nanoTime()
                 }
                 handler.postDelayed(heldRunnable, ViewConfiguration.getLongPressTimeout().toLong())
             }

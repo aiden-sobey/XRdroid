@@ -24,6 +24,8 @@ object Session {
     @Volatile var activeScreen: Screen? = null
     // True while a finger is on the trackpad, so the active screen can't change mid-gesture
     @Volatile var touchActive = false
+    // When the trackpad last clicked (System.nanoTime), so the cursor can pulse
+    @Volatile var clickNanos = 0L
 
     @Volatile var onHomeRequested: ((Int) -> Unit)? = null
     @Volatile var onRecenterRequested: (() -> Unit)? = null
