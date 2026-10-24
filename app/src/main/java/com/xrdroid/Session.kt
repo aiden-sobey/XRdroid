@@ -10,6 +10,12 @@ object Session {
     class Screen(val displayId: Int, val width: Int, val height: Int, val name: String) {
         @Volatile var cursorX = width / 2f
         @Volatile var cursorY = height / 2f
+        // Where the wearer is looking on this screen, in its pixels, and how many pixels a degree covers;
+        // kept up to date by the renderer for the phone pointer
+        @Volatile var gazeX = width / 2f
+        @Volatile var gazeY = height / 2f
+        @Volatile var pxPerDegreeX = 42f
+        @Volatile var pxPerDegreeY = 42f
     }
 
     @Volatile var running = false

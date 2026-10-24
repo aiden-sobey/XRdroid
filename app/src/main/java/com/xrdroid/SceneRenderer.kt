@@ -1,11 +1,9 @@
 package com.xrdroid
 
-import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
-import android.opengl.GLUtils
 import android.opengl.Matrix
 import android.util.Log
 import android.view.Surface
@@ -31,7 +29,6 @@ import kotlin.math.tan
 // fixed: always straight ahead, following the head.
 class SceneRenderer(
     private val imu: VitureImu,
-    private val cursorBitmap: Bitmap,
     layout: ScreenLayout,
     scale: Float,
     fixed: Boolean,
@@ -59,8 +56,8 @@ class SceneRenderer(
         private val ACTIVE_RIM_COLOR = floatArrayOf(0.42f, 0.37f, 0.72f)
         private const val GLOW_STRENGTH = 0.22f
         private const val GLOW_FALLOFF_PX = 14f
-        // Cursor height in screen pixels
-        private const val CURSOR_SIZE_PX = 36f
+        // Span of the cursor's dot of light and the glow and shade around it, in screen pixels
+        private const val DOT_SIZE_PX = 34f
         // How far past the edge of the screen with the trackpad the gaze must go before it switches screens
         private const val SWITCH_HYSTERESIS_DEGREES = 3f
         // Closest that neighbouring screens' borders may come once tilted towards the wearer
@@ -127,12 +124,18 @@ class SceneRenderer(
                 gl_FragColor = vec4(uRim * (rim + glow), 0.0);
             }
         """
-        private const val CURSOR_FRAGMENT_SHADER = """
+        // The cursor: a bright dot with a soft violet glow, over a faint shade that dims what's underneath so
+        // the dot still shows on a white page. Premultiplied.
+        private const val DOT_FRAGMENT_SHADER = """
             precision mediump float;
-            uniform sampler2D uTexture;
             varying vec2 vTexCoord;
             void main() {
-                gl_FragColor = texture2D(uTexture, vTexCoord);
+                float r = length(vTexCoord - 0.5) * 2.0;
+                float core = 1.0 - smoothstep(0.26, 0.36, r);
+                float glow = 0.55 * exp(-r * r * 7.0) * (1.0 - smoothstep(0.8, 1.0, r));
+                float shade = 0.4 * (1.0 - smoothstep(0.45, 1.0, r));
+                vec3 light = vec3(1.0) * core + vec3(0.78, 0.74, 1.0) * glow * (1.0 - core);
+                gl_FragColor = vec4(light, max(core, shade));
             }
         """
 
@@ -144,8 +147,6 @@ class SceneRenderer(
             1f, 1f, 1f, 1f
         )
         private val IDENTITY = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
-        // Bitmaps are uploaded top row first, so flip v for the cursor
-        private val FLIP_V = floatArrayOf(1f, 0f, 0f, 0f, 0f, -1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 1f, 0f, 1f)
 
         // A screen as a triangle strip of bottom/top vertex pairs in its own frame, grown by margin on every
         // side (for the border) and tilted to face the wearer. Curved screens follow the cylinder in segments.
@@ -261,9 +262,8 @@ class SceneRenderer(
     private val quadBuffer = ByteBuffer.allocateDirect(QUAD.size * 4).order(ByteOrder.nativeOrder())
         .asFloatBuffer().put(QUAD).also { it.position(0) }
     private var screenProgram = 0
-    private var cursorProgram = 0
+    private var dotProgram = 0
     private var frameProgram = 0
-    private var cursorTextureId = 0
     // Where the wearer was looking when they last recentred; the screens are placed around it
     private var viewReference = Quat.IDENTITY
     // How far above (positive) or below the horizon the screens sit, from the last recentre
@@ -276,6 +276,7 @@ class SceneRenderer(
     private val projection = FloatArray(16)
     private val viewProjection = FloatArray(16)
     private val model = FloatArray(16)
+    private val gazePoint = FloatArray(2)
     private val mvp = FloatArray(16)
 
     private var statsStartNanos = 0L
@@ -284,13 +285,13 @@ class SceneRenderer(
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         screenProgram = buildProgram(TEXTURE_VERTEX_SHADER, SCREEN_FRAGMENT_SHADER)
-        cursorProgram = buildProgram(TEXTURE_VERTEX_SHADER, CURSOR_FRAGMENT_SHADER)
+        dotProgram = buildProgram(TEXTURE_VERTEX_SHADER, DOT_FRAGMENT_SHADER)
         frameProgram = buildProgram(TEXTURE_VERTEX_SHADER, FRAME_FRAGMENT_SHADER)
         GLES20.glClearColor(0f, 0f, 0f, 1f)
 
         // The EGL context is preserved across pauses, so textures are only set up once
         if (screens.first().textureId != 0) return
-        val textures = IntArray(screens.size + 1)
+        val textures = IntArray(screens.size)
         GLES20.glGenTextures(textures.size, textures, 0)
         screens.forEachIndexed { i, screen ->
             screen.textureId = textures[i]
@@ -301,9 +302,6 @@ class SceneRenderer(
             }
             screen.surface = Surface(screen.surfaceTexture)
         }
-        cursorTextureId = textures.last()
-        bindTexture(GLES20.GL_TEXTURE_2D, cursorTextureId)
-        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, cursorBitmap, 0)
         onScreensReady(screens.map { it.surface })
     }
 
@@ -395,7 +393,48 @@ class SceneRenderer(
         if (current >= 0 && best != current && distance(current) < distance(best) + SWITCH_HYSTERESIS_DEGREES) {
             best = current
         }
+        // For the phone pointer: where the gaze meets the screen, before it becomes the active one
+        screens.forEachIndexed { i, screen ->
+            inputScreens[i].pxPerDegreeX = screen.spec.widthPx / screen.widthDegrees
+            inputScreens[i].pxPerDegreeY = screen.spec.heightPx / screen.heightDegrees
+        }
+        if (pointOn(screens[best], -gaze[8].toDouble(), -gaze[9].toDouble(), -gaze[10].toDouble(), gazePoint)) {
+            inputScreens[best].gazeX = gazePoint[0] * inputScreens[best].width
+            inputScreens[best].gazeY = gazePoint[1] * inputScreens[best].height
+        }
         Session.activeScreen = inputScreens[best]
+    }
+
+    // Where a direction from the wearer, in the recentred frame, meets a screen: the inverse of
+    // ScreenGeometry.point. Writes how far across (0 at the left) and down (0 at the top) it lands, kept
+    // within the screen; false if the direction points away from it.
+    private fun pointOn(screen: Screen, dx: Double, dy: Double, dz: Double, out: FloatArray): Boolean {
+        // Undo the arrangement's tilt, the screen's turn to its yaw, then the screen's own tilt
+        val arrangement = Math.toRadians((pitchReference() - ownTilt()).toDouble())
+        val y1 = dy * cos(arrangement) + dz * sin(arrangement)
+        val z1 = -dy * sin(arrangement) + dz * cos(arrangement)
+        val yaw = Math.toRadians(screen.yawDegrees.toDouble())
+        val x2 = dx * cos(yaw) - z1 * sin(yaw)
+        val z2 = dx * sin(yaw) + z1 * cos(yaw)
+        val tilt = Math.toRadians((ownTilt() + screen.pitchDegrees).toDouble())
+        val y3 = y1 * cos(tilt) + z2 * sin(tilt)
+        val z3 = -y1 * sin(tilt) + z2 * cos(tilt)
+        val across: Double
+        val up: Double
+        if (screen.spec.curved) {
+            // Positive angles are to the left; the ray meets the upright cylinder at the screen's distance
+            val angle = Math.toDegrees(atan2(-x2, -z3))
+            across = 0.5 - angle / screen.widthDegrees
+            up = SCREEN_DISTANCE * y3 / hypot(x2, z3) / screen.height + 0.5
+        } else {
+            if (z3 > -1e-3) return false
+            val reach = -SCREEN_DISTANCE / z3
+            across = reach * x2 / screen.width + 0.5
+            up = reach * y3 / screen.height + 0.5
+        }
+        out[0] = across.coerceIn(0.0, 1.0).toFloat()
+        out[1] = (1 - up).coerceIn(0.0, 1.0).toFloat()
+        return true
     }
 
     // Faces the screens towards the wearer at the recentred height: each screen tilts on its own as far as
@@ -480,36 +519,32 @@ class SceneRenderer(
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, screen.vertexCount)
     }
 
-    // A small flat quad on the screen at the cursor position, slightly in front of the surface; the
-    // cursor's tip is the top-left corner of its image
+    // The cursor's dot of light: a small flat quad centred on the cursor position, slightly in front of
+    // the screen's surface
     private fun drawCursor(screen: Screen, input: Session.Screen) {
         val u = input.cursorX / input.width
         val y = screen.height / 2f - input.cursorY / input.height * screen.height
-        val half = CURSOR_SIZE_PX * screen.height / input.height / 2f
-        // Tilted as the screen's mesh is
+        val half = DOT_SIZE_PX * screen.height / input.height / 2f
+        // Centred on the cursor, and tilted as the screen's mesh is
         placeScreen(screen)
         if (screen.spec.curved) {
             Matrix.rotateM(model, 0, screen.meshTilt, 1f, 0f, 0f)
             Matrix.rotateM(model, 0, screen.widthDegrees / 2f - u * screen.widthDegrees, 0f, 1f, 0f)
-            Matrix.translateM(model, 0, half, y - half, -SCREEN_DISTANCE * 0.995f)
+            Matrix.translateM(model, 0, 0f, y, -SCREEN_DISTANCE * 0.995f)
         } else {
             Matrix.rotateM(model, 0, screen.meshTilt, 1f, 0f, 0f)
-            Matrix.translateM(model, 0, (u - 0.5f) * screen.width + half, y - half, -SCREEN_DISTANCE * 0.995f)
+            Matrix.translateM(model, 0, (u - 0.5f) * screen.width, y, -SCREEN_DISTANCE * 0.995f)
         }
         Matrix.scaleM(model, 0, half, half, 1f)
         Matrix.multiplyMM(mvp, 0, viewProjection, 0, model, 0)
 
         GLES20.glEnable(GLES20.GL_BLEND)
-        // Android bitmaps are premultiplied
         GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-        GLES20.glUseProgram(cursorProgram)
-        GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(cursorProgram, "uMvp"), 1, false, mvp, 0)
-        GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(cursorProgram, "uTexMatrix"), 1, false, FLIP_V, 0)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, cursorTextureId)
-        GLES20.glUniform1i(GLES20.glGetUniformLocation(cursorProgram, "uTexture"), 0)
-        val position = GLES20.glGetAttribLocation(cursorProgram, "aPosition")
-        val texCoord = GLES20.glGetAttribLocation(cursorProgram, "aTexCoord")
+        GLES20.glUseProgram(dotProgram)
+        GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(dotProgram, "uMvp"), 1, false, mvp, 0)
+        GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(dotProgram, "uTexMatrix"), 1, false, IDENTITY, 0)
+        val position = GLES20.glGetAttribLocation(dotProgram, "aPosition")
+        val texCoord = GLES20.glGetAttribLocation(dotProgram, "aTexCoord")
         quadBuffer.position(0)
         GLES20.glVertexAttribPointer(position, 2, GLES20.GL_FLOAT, false, 16, quadBuffer)
         GLES20.glEnableVertexAttribArray(position)

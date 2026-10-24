@@ -10,7 +10,9 @@ import android.view.ViewConfiguration
 import kotlin.math.hypot
 
 // Turns touches on the phone into cursor movement, clicks, two-finger scrolling and long-press drags on
-// the spatial screen being looked at. The screen is fixed for the length of each gesture.
+// the spatial screen being looked at. The screen is fixed for the length of each gesture. While the phone
+// pointer aims the cursor, one finger instead works as a touch at the cursor: tap to click, slide to drag,
+// hold to long-press. Sliding drags what's under the cursor but leaves the cursor where it was aimed.
 class TrackpadGestures(private val view: View) : View.OnTouchListener {
 
     companion object {
@@ -26,6 +28,13 @@ class TrackpadGestures(private val view: View) : View.OnTouchListener {
 
     private val handler = Handler(Looper.getMainLooper())
     private val finger = TouchInjector()
+    // Aims the cursor while it's running
+    var pointer: PhonePointer? = null
+    // Whether the current gesture started while the pointer was aiming
+    private var pointing = false
+    // While pointing, where the touch has been dragged to; the cursor itself stays where it was aimed
+    private var touchX = 0f
+    private var touchY = 0f
     private val scrollSlopPx = SCROLL_SLOP_DP * view.resources.displayMetrics.density
 
     private var screen: Session.Screen? = null
@@ -57,8 +66,14 @@ class TrackpadGestures(private val view: View) : View.OnTouchListener {
     private val pickedUpRunnable = Runnable {
         if (isDragging) view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
     }
+    // While pointing, a finger held still has been a long press for the app by now
+    private val heldRunnable = Runnable {
+        if (!moved) view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    }
 
     override fun onTouch(v: View, event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) pointing = pointer?.running == true
+        if (pointing) return onPointingTouch(event)
         val x = event.x
         val y = event.y
         when (event.actionMasked) {
@@ -135,7 +150,83 @@ class TrackpadGestures(private val view: View) : View.OnTouchListener {
         return true
     }
 
+    // One finger is a touch that starts at the cursor and follows the finger, while the cursor stays put; the
+    // phone's aim is frozen meanwhile. A second finger turns it into a two-finger scroll.
+    private fun onPointingTouch(event: MotionEvent): Boolean {
+        val x = event.x
+        val y = event.y
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                pointer?.freeze()
+                screen = Session.activeScreen
+                Session.touchActive = true
+                startX = x
+                startY = y
+                lastX = x
+                lastY = y
+                moved = false
+                isMultiTouch = false
+                isScrolling = false
+                twoFingerTravel = 0f
+                screen?.let {
+                    touchX = it.cursorX
+                    touchY = it.cursorY
+                    finger.down(it.displayId, touchX, touchY)
+                }
+                handler.postDelayed(heldRunnable, ViewConfiguration.getLongPressTimeout().toLong())
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                handler.removeCallbacks(heldRunnable)
+                if (!isMultiTouch) finger.cancel()
+                isMultiTouch = true
+                moved = true
+                updateCentroid(event)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (isMultiTouch && event.pointerCount >= 2) {
+                    val previousX = centroidX
+                    val previousY = centroidY
+                    updateCentroid(event)
+                    scroll(centroidX - previousX, centroidY - previousY)
+                } else if (!isMultiTouch) {
+                    if (hypot(x - startX, y - startY) > MOVE_SLOP_PX) {
+                        moved = true
+                        handler.removeCallbacks(heldRunnable)
+                    }
+                    val target = screen
+                    if (target != null) {
+                        touchX = (touchX + (x - lastX) * CURSOR_GAIN).coerceIn(0f, target.width - 1f)
+                        touchY = (touchY + (y - lastY) * CURSOR_GAIN).coerceIn(0f, target.height - 1f)
+                        finger.move(touchX, touchY)
+                    }
+                }
+                lastX = x
+                lastY = y
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (event.pointerCount <= 2 && isScrolling) {
+                    finger.up()
+                    isScrolling = false
+                } else if (event.pointerCount > 2) {
+                    updateCentroid(event, event.actionIndex)
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                if (!isMultiTouch || isScrolling) finger.up()
+                finishGesture()
+                pointer?.release()
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                finger.cancel()
+                finishGesture()
+                pointer?.release()
+            }
+        }
+        return true
+    }
+
     private fun finishGesture() {
+        handler.removeCallbacks(heldRunnable)
         handler.removeCallbacks(pickedUpRunnable)
         isDragging = false
         isScrolling = false

@@ -15,7 +15,6 @@ import android.util.Log
 import android.view.Surface
 import android.view.WindowManager
 import androidx.core.content.ContextCompat
-import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -32,7 +31,6 @@ class GlassesActivity : Activity() {
         private const val ACTION_TUNE = "com.xrdroid.TUNE"
         // Sent by the phone screen when the layout changes; the screens are rebuilt to match
         const val ACTION_APPLY_LAYOUT = "com.xrdroid.APPLY_LAYOUT"
-        private const val CURSOR_BITMAP_PX = 64
     }
 
     private lateinit var imu: VitureImu
@@ -62,9 +60,8 @@ class GlassesActivity : Activity() {
         Session.running = true
         imu = VitureImu(this)
         displays = VirtualScreens(this) { status -> Log.i(TAG, "Displays: $status") }
-        val cursor = ContextCompat.getDrawable(this, R.drawable.cursor)!!.toBitmap(CURSOR_BITMAP_PX, CURSOR_BITMAP_PX)
         val layout = ScreenLayout.saved(this)
-        renderer = SceneRenderer(imu, cursor, layout, ScreenLayout.savedScale(this), ScreenLayout.isFixed(this, layout)) { surfaces ->
+        renderer = SceneRenderer(imu, layout, ScreenLayout.savedScale(this), ScreenLayout.isFixed(this, layout)) { surfaces ->
             runOnUiThread { createScreens(surfaces) }
         }
         Session.onRecenterRequested = { renderer.recenterRequested = true }

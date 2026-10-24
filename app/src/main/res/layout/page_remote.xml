@@ -26,6 +26,16 @@
             app:iconGravity="end"
             app:iconPadding="2dp" />
 
+        <!-- Aim the cursor by pointing the phone -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/pointer_toggle"
+            style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:contentDescription="Point with the phone"
+            app:icon="@drawable/ic_pointer" />
+
         <Space
             android:layout_width="0dp"
             android:layout_height="0dp"

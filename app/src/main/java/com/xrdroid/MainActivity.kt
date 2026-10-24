@@ -69,6 +69,8 @@ class MainActivity : AppCompatActivity() {
         // Preset pictures are 2560 wide, so this gives thumbnails a little over THUMBNAIL_PX
         private const val THUMBNAIL_SAMPLE = 8
         private const val SETUP_POLL_MS = 1500L
+        // Long enough for the renderer to have recentred, so the pointer starts from the new gaze
+        private const val POINTER_RESET_DELAY_MS = 100L
         // The glasses' display normally starts within a second or two of their USB connection
         private const val REPLUG_AFTER_MS = 4000L
     }
@@ -86,6 +88,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var usbManager: UsbManager
     private lateinit var connection: TextView
     private lateinit var hint: TextView
+    private lateinit var pointer: PhonePointer
+    private lateinit var pointerToggle: MaterialButton
+    private var pointerToggleTint: ColorStateList? = null
+    private var pointerToggleIconTint: ColorStateList? = null
     private lateinit var shizukuCheck: Check
     private lateinit var headTrackingCheck: Check
     private lateinit var setupCard: View
@@ -145,6 +151,7 @@ class MainActivity : AppCompatActivity() {
         displayManager = getSystemService(DisplayManager::class.java)
         usbManager = getSystemService(UsbManager::class.java)
         connection = findViewById(R.id.connection)
+        pointer = PhonePointer(this)
 
         val remotePage = findViewById<View>(R.id.page_remote)
         val settingsPage = findViewById<View>(R.id.page_settings)
@@ -178,9 +185,12 @@ class MainActivity : AppCompatActivity() {
         showLayouts()
         applyLayoutIfChanged()
         handler.post(setupPoll)
+        applyPointer()
     }
 
     override fun onPause() {
+        // The pointer only runs while this screen is open, to save power
+        pointer.stop()
         handler.removeCallbacks(setupPoll)
         super.onPause()
     }
@@ -198,13 +208,28 @@ class MainActivity : AppCompatActivity() {
 
     private fun setUpRemote() {
         hint = findViewById(R.id.trackpad_hint)
-        findViewById<TrackpadView>(R.id.trackpad).onFirstTouch = { hint.animate().alpha(0f).setDuration(400).start() }
+        findViewById<TrackpadView>(R.id.trackpad).apply {
+            onFirstTouch = { hint.animate().alpha(0f).setDuration(400).start() }
+            gestures.pointer = pointer
+        }
+        pointerToggle = findViewById(R.id.pointer_toggle)
+        pointerToggleTint = pointerToggle.backgroundTintList
+        pointerToggleIconTint = pointerToggle.iconTint
+        pointerToggle.isVisible = pointer.available
+        pointerToggle.setOnClickListener { view ->
+            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            PhonePointer.save(this, !PhonePointer.saved(this))
+            applyPointer()
+        }
+        showPointerToggle()
         findViewById<View>(R.id.view_mode).setOnClickListener { showViewModeMenu(it) }
         findViewById<View>(R.id.further).setOnClickListener { view -> changeScale(view, 1f / SCALE_STEP) }
         findViewById<View>(R.id.closer).setOnClickListener { view -> changeScale(view, SCALE_STEP) }
         findViewById<View>(R.id.recenter).setOnClickListener { view ->
             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
             Session.onRecenterRequested?.invoke()
+            // Once the screens have moved, the pointer starts again from where the wearer is looking
+            handler.postDelayed({ pointer.reset() }, POINTER_RESET_DELAY_MS)
         }
         findViewById<View>(R.id.back).setOnClickListener { view ->
             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -216,6 +241,20 @@ class MainActivity : AppCompatActivity() {
             val screen = Session.activeScreen ?: return@setOnClickListener
             Session.onHomeRequested?.invoke(screen.displayId)
         }
+    }
+
+    // Runs the pointer while it's turned on, and shows whether it is
+    private fun applyPointer() {
+        if (PhonePointer.saved(this)) pointer.start() else pointer.stop()
+        showPointerToggle()
+        refreshSetup()
+    }
+
+    private fun showPointerToggle() {
+        val on = PhonePointer.saved(this)
+        pointerToggle.backgroundTintList = if (on) ColorStateList.valueOf(ContextCompat.getColor(this, R.color.accent)) else pointerToggleTint
+        pointerToggle.iconTint = if (on) ColorStateList.valueOf(ContextCompat.getColor(this, R.color.on_accent)) else pointerToggleIconTint
+        pointerToggle.contentDescription = if (on) "Stop pointing with the phone" else "Point with the phone"
     }
 
     private fun setUpSettings() {
@@ -466,6 +505,7 @@ class MainActivity : AppCompatActivity() {
         hint.text = getString(when {
             Helper.service == null -> R.string.trackpad_hint_setup
             needsReplug -> R.string.trackpad_hint_replug
+            pointer.running -> R.string.trackpad_hint_pointer
             else -> R.string.trackpad_hint
         })
 

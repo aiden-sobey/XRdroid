@@ -19,7 +19,7 @@ class TrackpadView @JvmOverloads constructor(context: Context, attrs: AttributeS
     // Called on the first touch, e.g. to fade out the hint
     var onFirstTouch: (() -> Unit)? = null
 
-    private val trackpad = TrackpadGestures(this)
+    val gestures = TrackpadGestures(this)
     private val density = resources.displayMetrics.density
     private val gridSpacing = 22 * density
     private val glowRadius = 44 * density
@@ -33,7 +33,7 @@ class TrackpadView @JvmOverloads constructor(context: Context, attrs: AttributeS
             onFirstTouch?.invoke()
             onFirstTouch = null
         }
-        trackpad.onTouch(this, event)
+        gestures.onTouch(this, event)
         when (event.actionMasked) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> fingers.clear()
             MotionEvent.ACTION_POINTER_UP -> fingers.remove(event.getPointerId(event.actionIndex))

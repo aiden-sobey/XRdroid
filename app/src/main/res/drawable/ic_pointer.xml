@@ -1,0 +1,21 @@
+<!-- A phone aiming a beam at a dot -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:tint="?attr/colorControlNormal"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M5,11.5h4.5a1,1 0,0 1,1 1v7.5a1,1 0,0 1,-1 1H5a1,1 0,0 1,-1 -1v-7.5a1,1 0,0 1,1 -1z"
+        android:strokeWidth="2"
+        android:strokeColor="@android:color/white"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M8.5,8.5L14.5,4.5"
+        android:strokeWidth="2"
+        android:strokeColor="@android:color/white"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M18.5,3.5m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
+</vector>
