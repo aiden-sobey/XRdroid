@@ -24,19 +24,26 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.tan
 
 // Draws each virtual screen as a section of a cylinder around the wearer, so wide layouts wrap around
-// rather than stretch at the edges, and turns the view with their head
+// rather than stretch at the edges, and turns the view with their head. A single screen can instead be
+// fixed: always straight ahead, following the head.
 class SceneRenderer(
     private val imu: VitureImu,
     private val cursorBitmap: Bitmap,
     layout: ScreenLayout,
     scale: Float,
+    fixed: Boolean,
     private val onScreensReady: (List<Surface>) -> Unit
 ) : GLSurfaceView.Renderer {
 
     companion object {
         private const val TAG = "XRdroid"
+        // A fixed screen is shrunk if need be to fill this much of the glasses' view, so its edges show
+        private const val FIXED_FILL = 0.92f
+        private const val VIEW_HEIGHT_DEGREES = 25f
+        private const val VIEW_ASPECT = 16f / 9f
         // Radius of the cylinder the screens sit on, in world units
         private const val SCREEN_DISTANCE = ScreenGeometry.DISTANCE
         // Kept clear around each screen when working out how far neighbours may tilt: its rim and the
@@ -206,16 +213,43 @@ class SceneRenderer(
 
     // Scratch space for the gap checks, which run while the renderer is constructed
     private val corner = FloatArray(3)
-    val screens = layout.screens.map { Screen(it).apply { place(scale) } }
+    private var scale = scale
+    private var fixed = fixed
+    val screens = layout.screens.map { Screen(it).apply { place(placementScale(it)) } }
     // How far each screen may tilt about its own horizontal axis, which keeps it level as the head turns
     // to it, before neighbours come too close; any more pitch tilts the whole arrangement
     private var maxOwnTiltDegrees = maxOwnTilt()
 
     // Rebuilds the screens' geometry at a new size; call on the GL thread
     fun setScale(scale: Float) {
-        screens.forEach { it.place(scale) }
+        this.scale = scale
+        placeScreens()
+    }
+
+    // Switches a single screen between staying put in the room and following the head; call on the GL thread.
+    // Going back to floating recentres, so the screen stays where the wearer is looking rather than
+    // jumping back to wherever they last recentred.
+    fun setFixed(fixed: Boolean) {
+        if (fixed == this.fixed) return
+        this.fixed = fixed
+        if (!fixed) recenterRequested = true
+        placeScreens()
+    }
+
+    private fun placeScreens() {
+        screens.forEach { it.place(placementScale(it.spec)) }
         maxOwnTiltDegrees = maxOwnTilt()
     }
+
+    // A fixed screen too big for the glasses' view is shrunk to fit inside it
+    private fun placementScale(spec: ScreenSpec): Float {
+        if (!fixed) return scale
+        val viewWidth = Math.toDegrees(2 * atan(tan(Math.toRadians(VIEW_HEIGHT_DEGREES / 2.0)) * VIEW_ASPECT)).toFloat()
+        return scale * minOf(1f, FIXED_FILL * viewWidth / spec.widthDegrees, FIXED_FILL * VIEW_HEIGHT_DEGREES / spec.heightDegrees)
+    }
+
+    // Where the screens are tipped to face; a fixed screen is always straight ahead
+    private fun pitchReference() = if (fixed) 0f else pitchReferenceDegrees
 
     // Set to recentre on where the wearer is looking, up or down included
     @Volatile var recenterRequested = false
@@ -297,11 +331,11 @@ class SceneRenderer(
             }
             Quat.mul(Quat.conj(viewReference), sample.orientation)
         }
-        updateActiveScreen(head)
+        updateActiveScreen(if (fixed) Quat.IDENTITY else head)
         // Predict from when the sample arrived, so every frame lands at the same point in time
-        // whatever the sample's age
+        // whatever the sample's age. A fixed screen ignores the head altogether.
         val age = if (sample == null) 0f else ((System.nanoTime() - sample.nanos) / 1e9f).coerceIn(0f, 0.05f)
-        val predicted = Quat.integrate(head, imu.angularRate, lookaheadSeconds + age)
+        val predicted = if (fixed) Quat.IDENTITY else Quat.integrate(head, imu.angularRate, lookaheadSeconds + age)
         // The view is the inverse of the head rotation; the meshes are already in world space
         Quat.toMatrix(Quat.conj(predicted), view)
         Matrix.perspectiveM(projection, 0, verticalFovDegrees, aspect, 0.1f, 100f)
@@ -343,7 +377,7 @@ class SceneRenderer(
         Quat.toMatrix(head, gaze)
         // Measured around the arrangement's own vertical, which tips with it when recentred looking up or down
         val ownTilt = ownTilt()
-        val tilt = Math.toRadians((pitchReferenceDegrees - ownTilt).toDouble())
+        val tilt = Math.toRadians((pitchReference() - ownTilt).toDouble())
         val towardZ = gaze[10] * cos(tilt) - gaze[9] * sin(tilt)
         val up = -gaze[9] * cos(tilt) - gaze[10] * sin(tilt)
         val yaw = Math.toDegrees(atan2(gaze[8].toDouble(), towardZ)).toFloat()
@@ -369,11 +403,11 @@ class SceneRenderer(
     // for the rest
     private fun placeScreen(screen: Screen) {
         Matrix.setIdentityM(model, 0)
-        Matrix.rotateM(model, 0, pitchReferenceDegrees - ownTilt(), 1f, 0f, 0f)
+        Matrix.rotateM(model, 0, pitchReference() - ownTilt(), 1f, 0f, 0f)
         Matrix.rotateM(model, 0, screen.yawDegrees, 0f, 1f, 0f)
     }
 
-    private fun ownTilt() = pitchReferenceDegrees.coerceIn(-maxOwnTiltDegrees, maxOwnTiltDegrees)
+    private fun ownTilt() = pitchReference().coerceIn(-maxOwnTiltDegrees, maxOwnTiltDegrees)
 
     // Tilting screens that sit side by side brings their top (or bottom) inner corners together, so find
     // the most tilt that keeps every such pair at least MIN_GAP_DEGREES apart. Screens above or below each

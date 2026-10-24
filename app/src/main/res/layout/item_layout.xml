@@ -10,14 +10,20 @@
     android:focusable="true"
     app:cardBackgroundColor="?attr/colorSurfaceContainer"
     app:cardCornerRadius="24dp"
+    app:cardForegroundColor="@android:color/transparent"
     app:checkedIcon="@null">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
 
         <com.xrdroid.LayoutPreviewView
             android:id="@+id/layout_preview"
@@ -56,5 +62,7 @@
             android:contentDescription="Edit this layout"
             android:visibility="gone"
             app:icon="@drawable/ic_edit" />
+    </LinearLayout>
+
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

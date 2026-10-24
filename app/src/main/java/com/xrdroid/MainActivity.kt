@@ -30,6 +30,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.PickVisualMediaRequest
@@ -198,6 +199,7 @@ class MainActivity : AppCompatActivity() {
     private fun setUpRemote() {
         hint = findViewById(R.id.trackpad_hint)
         findViewById<TrackpadView>(R.id.trackpad).onFirstTouch = { hint.animate().alpha(0f).setDuration(400).start() }
+        findViewById<View>(R.id.view_mode).setOnClickListener { showViewModeMenu(it) }
         findViewById<View>(R.id.further).setOnClickListener { view -> changeScale(view, 1f / SCALE_STEP) }
         findViewById<View>(R.id.closer).setOnClickListener { view -> changeScale(view, SCALE_STEP) }
         findViewById<View>(R.id.recenter).setOnClickListener { view ->
@@ -361,6 +363,23 @@ class MainActivity : AppCompatActivity() {
         applyLayoutIfChanged()
     }
 
+    private fun showViewModeMenu(anchor: View) {
+        PopupMenu(this, anchor).apply {
+            val fixed = ScreenLayout.savedFixed(this@MainActivity)
+            menu.add(0, 0, 0, "Floating: stays put in the room").isChecked = !fixed
+            menu.add(0, 1, 1, "Fixed: moves with your head").isChecked = fixed
+            menu.setGroupCheckable(0, true, true)
+            setOnMenuItemClickListener { item ->
+                val choice = item.itemId == 1
+                ScreenLayout.saveFixed(this@MainActivity, choice)
+                Session.onFixedChanged?.invoke(choice)
+                showSelectedLayout()
+                true
+            }
+            show()
+        }
+    }
+
     private fun applyLayoutIfChanged() {
         val layout = ScreenLayout.saved(this).signature
         if (layout == appliedLayout) return
@@ -370,14 +389,28 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSelectedLayout() {
         val selected = ScreenLayout.saved(this)
+        val fixed = ScreenLayout.savedFixed(this)
         val accent = ContextCompat.getColor(this, R.color.accent)
         val outline = ContextCompat.getColor(this, R.color.outline)
+        val text = ContextCompat.getColor(this, R.color.text)
         for ((layout, card) in layoutCards) {
+            // Shown by the border, sketch and title rather than tinting the card, which would dim its text
             val isSelected = layout == selected
             card.isChecked = isSelected
             card.strokeColor = if (isSelected) accent else outline
             card.strokeWidth = dp(if (isSelected) 2 else 1)
             card.findViewById<LayoutPreviewView>(R.id.layout_preview).highlighted = isSelected
+            card.findViewById<TextView>(R.id.layout_title).setTextColor(if (isSelected) accent else text)
+        }
+        // On the Remote tab, a single screen can stay put in the room or follow the head
+        findViewById<MaterialButton>(R.id.view_mode).apply {
+            isVisible = selected.screens.size == 1
+            this.text = if (fixed) "Fixed" else "Floating"
+        }
+        // A fixed screen is always straight ahead, so there's nothing to recentre
+        findViewById<View>(R.id.recenter).apply {
+            isEnabled = !ScreenLayout.isFixed(this@MainActivity, selected)
+            alpha = if (isEnabled) 1f else 0.4f
         }
     }
 

@@ -23,6 +23,8 @@ object Session {
     @Volatile var onRecenterRequested: (() -> Unit)? = null
     // Called with the new size when the screens are brought closer or pushed back
     @Volatile var onScaleChanged: ((Float) -> Unit)? = null
+    // Called when a single screen switches between staying put in the room and following the head
+    @Volatile var onFixedChanged: ((Boolean) -> Unit)? = null
 
     // The home screen on each spatial screen, by display id
     val homes = ConcurrentHashMap<Int, WeakReference<HomeActivity>>()

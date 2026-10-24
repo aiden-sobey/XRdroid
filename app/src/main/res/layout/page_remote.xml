@@ -7,12 +7,29 @@
     android:paddingStart="16dp"
     android:paddingEnd="16dp">
 
-    <!-- Screen size (push back / bring closer) and recentre -->
+    <!-- Floating or fixed (single-screen layouts only), screen size (push back / bring closer) and recentre -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center_vertical|end"
+        android:gravity="center_vertical"
         android:orientation="horizontal">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/view_mode"
+            style="@style/Widget.Material3.Button.TonalButton.Icon"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingStart="16dp"
+            android:paddingEnd="10dp"
+            android:visibility="gone"
+            app:icon="@drawable/ic_arrow_drop_down"
+            app:iconGravity="end"
+            app:iconPadding="2dp" />
+
+        <Space
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/further"

@@ -40,6 +40,7 @@ class ScreenLayout(val id: String, val title: String, val description: String, v
         private const val PREFS = "settings"
         private const val KEY_LAYOUT = "layout"
         private const val KEY_SCALE = "scale"
+        private const val KEY_FIXED = "fixed"
         // How far the screens can be brought closer (bigger) or pushed back (smaller)
         const val MIN_SCALE = 0.6f
         const val MAX_SCALE = 1.6f
@@ -73,6 +74,15 @@ class ScreenLayout(val id: String, val title: String, val description: String, v
         fun select(context: Context, id: String) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_LAYOUT, id).apply()
         }
+
+        // A single screen can follow the head instead of staying put in the room
+        fun savedFixed(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_FIXED, false)
+
+        fun saveFixed(context: Context, fixed: Boolean) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_FIXED, fixed).apply()
+        }
+
+        fun isFixed(context: Context, layout: ScreenLayout) = layout.screens.size == 1 && savedFixed(context)
 
         fun savedScale(context: Context) =
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getFloat(KEY_SCALE, 1f).coerceIn(MIN_SCALE, MAX_SCALE)

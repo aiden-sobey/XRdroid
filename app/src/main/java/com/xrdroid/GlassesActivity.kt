@@ -63,11 +63,13 @@ class GlassesActivity : Activity() {
         imu = VitureImu(this)
         displays = VirtualScreens(this) { status -> Log.i(TAG, "Displays: $status") }
         val cursor = ContextCompat.getDrawable(this, R.drawable.cursor)!!.toBitmap(CURSOR_BITMAP_PX, CURSOR_BITMAP_PX)
-        renderer = SceneRenderer(imu, cursor, ScreenLayout.saved(this), ScreenLayout.savedScale(this)) { surfaces ->
+        val layout = ScreenLayout.saved(this)
+        renderer = SceneRenderer(imu, cursor, layout, ScreenLayout.savedScale(this), ScreenLayout.isFixed(this, layout)) { surfaces ->
             runOnUiThread { createScreens(surfaces) }
         }
         Session.onRecenterRequested = { renderer.recenterRequested = true }
         Session.onScaleChanged = { scale -> glView.queueEvent { renderer.setScale(scale) } }
+        Session.onFixedChanged = { fixed -> glView.queueEvent { renderer.setFixed(fixed && layout.screens.size == 1) } }
         glView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
             preserveEGLContextOnPause = true
@@ -161,6 +163,7 @@ class GlassesActivity : Activity() {
         Session.running = false
         Session.onRecenterRequested = null
         Session.onScaleChanged = null
+        Session.onFixedChanged = null
         Session.onHomeRequested = null
         Session.activeScreen = null
         Session.screens = emptyList()
