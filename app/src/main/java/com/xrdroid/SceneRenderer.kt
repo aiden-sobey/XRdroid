@@ -17,12 +17,13 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.abs
 import kotlin.math.asin
+import kotlin.math.atan
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
-import kotlin.math.tan
 
 // Draws each virtual screen as a section of a cylinder around the wearer, so wide layouts wrap around
 // rather than stretch at the edges, and turns the view with their head
@@ -37,35 +38,86 @@ class SceneRenderer(
     companion object {
         private const val TAG = "XRdroid"
         // Radius of the cylinder the screens sit on, in world units
-        private const val SCREEN_DISTANCE = 2f
+        private const val SCREEN_DISTANCE = ScreenGeometry.DISTANCE
+        // Kept clear around each screen when working out how far neighbours may tilt: its rim and the
+        // brightest part of its glow
         private const val BORDER_DEGREES = 0.4f
+        private val BORDER_MARGIN = SCREEN_DISTANCE * Math.toRadians(BORDER_DEGREES.toDouble()).toFloat()
+        // How far the soft glow around each screen reaches
+        private const val GLOW_DEGREES = 1.2f
+        private val GLOW_MARGIN = SCREEN_DISTANCE * Math.toRadians(GLOW_DEGREES.toDouble()).toFloat()
+        // The glasses can only add light, so a screen's edge is drawn as a thin rim of light with a glow
+        // fading out from it, rather than a shadow. The screen with the trackpad gets a violet rim.
+        private val RIM_COLOR = floatArrayOf(0.36f, 0.38f, 0.42f)
+        private val ACTIVE_RIM_COLOR = floatArrayOf(0.42f, 0.37f, 0.72f)
+        private const val GLOW_STRENGTH = 0.22f
+        private const val GLOW_FALLOFF_PX = 14f
         // Cursor height in screen pixels
         private const val CURSOR_SIZE_PX = 36f
-        // How far past the midpoint the gaze must go before the trackpad switches screens
-        private const val SWITCH_HYSTERESIS_DEGREES = 4f
+        // How far past the edge of the screen with the trackpad the gaze must go before it switches screens
+        private const val SWITCH_HYSTERESIS_DEGREES = 3f
         // Closest that neighbouring screens' borders may come once tilted towards the wearer
         private const val MIN_GAP_DEGREES = 1f
         // Mesh vertices: x, y, z, u, v
         private const val MESH_STRIDE = 5 * 4
 
+        // vLocal is where the vertex sits across the mesh, 0 to 1 each way, before the texture transform
         private const val TEXTURE_VERTEX_SHADER = """
             uniform mat4 uMvp;
             uniform mat4 uTexMatrix;
             attribute vec4 aPosition;
             attribute vec4 aTexCoord;
             varying vec2 vTexCoord;
+            varying vec2 vLocal;
             void main() {
                 gl_Position = uMvp * aPosition;
                 vTexCoord = (uTexMatrix * aTexCoord).xy;
+                vLocal = aTexCoord.xy;
             }
         """
+        // Signed distance from a point to a rectangle centred on the origin, in the screen's own pixels (about
+        // the same size as the glasses' pixels): negative inside. Rounded outside the corners, so the rim and
+        // glow curve around them.
+        private const val BOX = """
+            float box(vec2 p, vec2 halfSize) {
+                vec2 q = abs(p) - halfSize;
+                return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+            }
+        """
+        // The screen, with its edges anti-aliased over about a pixel; premultiplied
         private const val SCREEN_FRAGMENT_SHADER = """
             #extension GL_OES_EGL_image_external : require
-            precision mediump float;
+            precision highp float;
             uniform samplerExternalOES uTexture;
+            uniform vec2 uSize;
             varying vec2 vTexCoord;
+            varying vec2 vLocal;
+        """ + BOX + """
             void main() {
-                gl_FragColor = texture2D(uTexture, vTexCoord);
+                float d = box((vLocal - 0.5) * uSize, uSize * 0.5);
+                gl_FragColor = texture2D(uTexture, vTexCoord) * clamp(0.5 - d, 0.0, 1.0);
+            }
+        """
+        // A thin rim of light just outside the screen's edge, a little brighter along the top as if lit from
+        // above, and a glow fading out from it to nothing at the edge of the strip. Added to what's there.
+        private const val FRAME_FRAGMENT_SHADER = """
+            precision highp float;
+            uniform vec2 uSize;
+            uniform float uMargin;
+            uniform vec3 uRim;
+            uniform float uGlow;
+            uniform float uFalloff;
+            varying vec2 vLocal;
+        """ + BOX + """
+            void main() {
+                vec2 full = uSize + 2.0 * uMargin;
+                vec2 p = vLocal * full - full * 0.5;
+                float d = box(p, uSize * 0.5);
+                if (d < -1.0) discard;
+                float lift = 0.75 + 0.5 * clamp(p.y / uSize.y + 0.5, 0.0, 1.0);
+                float rim = clamp(1.5 - abs(d - 1.0), 0.0, 1.0) * lift;
+                float glow = uGlow * exp(-max(d, 0.0) / uFalloff) * (1.0 - smoothstep(uMargin * 0.6, uMargin, d));
+                gl_FragColor = vec4(uRim * (rim + glow), 0.0);
             }
         """
         private const val CURSOR_FRAGMENT_SHADER = """
@@ -76,20 +128,6 @@ class SceneRenderer(
                 gl_FragColor = texture2D(uTexture, vTexCoord);
             }
         """
-        private const val COLOR_VERTEX_SHADER = """
-            uniform mat4 uMvp;
-            attribute vec4 aPosition;
-            void main() {
-                gl_Position = uMvp * aPosition;
-            }
-        """
-        private const val COLOR_FRAGMENT_SHADER = """
-            precision mediump float;
-            uniform vec4 uColor;
-            void main() {
-                gl_FragColor = uColor;
-            }
-        """
 
         // Flat unit quad for the cursor, as a triangle strip: x, y, u, v
         private val QUAD = floatArrayOf(
@@ -98,34 +136,23 @@ class SceneRenderer(
             -1f, 1f, 0f, 1f,
             1f, 1f, 1f, 1f
         )
+        private val IDENTITY = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
         // Bitmaps are uploaded top row first, so flip v for the cursor
         private val FLIP_V = floatArrayOf(1f, 0f, 0f, 0f, 0f, -1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 1f, 0f, 1f)
 
-        // A screen as a triangle strip of bottom/top vertex pairs in world space, grown by margin on every
-        // side (for the border). Curved screens follow the cylinder; flat ones face the wearer from their yaw.
-        private fun screenStrip(curved: Boolean, yawDegrees: Float, widthDegrees: Float, width: Float, height: Float, margin: Float): FloatBuffer {
+        // A screen as a triangle strip of bottom/top vertex pairs in its own frame, grown by margin on every
+        // side (for the border) and tilted to face the wearer. Curved screens follow the cylinder in segments.
+        private fun screenStrip(curved: Boolean, widthDegrees: Float, width: Float, height: Float, margin: Float, tiltDegrees: Float): FloatBuffer {
             val segments = if (curved) max(8, (widthDegrees / 2f).toInt()) else 1
-            val yaw = Math.toRadians(yawDegrees.toDouble())
-            val marginDegrees = Math.toDegrees((margin / SCREEN_DISTANCE).toDouble()).toFloat()
             val data = FloatArray((segments + 1) * 2 * 5)
+            val point = FloatArray(3)
             var i = 0
             for (segment in 0..segments) {
+                // Left edge first
                 val u = segment.toFloat() / segments
-                // Left edge first: positive yaw is to the left
-                val x: Float
-                val z: Float
-                if (curved) {
-                    val span = widthDegrees + 2 * marginDegrees
-                    val angle = Math.toRadians((yawDegrees + span / 2f - u * span).toDouble())
-                    x = (-SCREEN_DISTANCE * sin(angle)).toFloat()
-                    z = (-SCREEN_DISTANCE * cos(angle)).toFloat()
-                } else {
-                    val across = (u - 0.5f) * (width + 2 * margin)
-                    x = (across * cos(yaw) - SCREEN_DISTANCE * sin(yaw)).toFloat()
-                    z = (-across * sin(yaw) - SCREEN_DISTANCE * cos(yaw)).toFloat()
-                }
-                for ((y, v) in listOf(-height / 2f - margin to 0f, height / 2f + margin to 1f)) {
-                    data[i++] = x; data[i++] = y; data[i++] = z; data[i++] = u; data[i++] = v
+                for (v in listOf(0f, 1f)) {
+                    ScreenGeometry.point(curved, widthDegrees, width, height, margin, tiltDegrees, u, v, point)
+                    data[i++] = point[0]; data[i++] = point[1]; data[i++] = point[2]; data[i++] = u; data[i++] = v
                 }
             }
             return ByteBuffer.allocateDirect(data.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().put(data)
@@ -136,7 +163,9 @@ class SceneRenderer(
         // Where the screen sits at the current size: bringing screens closer makes each one wider and
         // spreads them apart, so neighbours never overlap
         var yawDegrees = 0f
+        var pitchDegrees = 0f
         var widthDegrees = 0f
+        var heightDegrees = 0f
         // Width along the surface (an arc for curved screens, the plane width for flat ones); the height
         // keeps the screen's pixel aspect
         var width = 0f
@@ -145,18 +174,27 @@ class SceneRenderer(
         lateinit var borderMesh: FloatBuffer
         var vertexCount = 0
         var borderVertexCount = 0
+        // The tilt built into the meshes, which changes when the screens are recentred up or down
+        var meshTilt = Float.NaN
+            private set
 
         fun place(scale: Float) {
             yawDegrees = spec.yawDegrees * scale
+            pitchDegrees = spec.pitchDegrees * scale
             widthDegrees = spec.widthDegrees * scale
-            val halfAngle = Math.toRadians(widthDegrees / 2.0)
-            width = (if (spec.curved) SCREEN_DISTANCE * 2 * halfAngle else SCREEN_DISTANCE * 2 * tan(halfAngle)).toFloat()
+            width = ScreenGeometry.width(spec.curved, widthDegrees)
             height = width * spec.heightPx / spec.widthPx
-            // Built straight ahead; turned to yawDegrees when drawn
-            mesh = screenStrip(spec.curved, 0f, widthDegrees, width, height, 0f)
-            borderMesh = screenStrip(spec.curved, 0f, widthDegrees, width, height, SCREEN_DISTANCE * Math.toRadians(BORDER_DEGREES.toDouble()).toFloat())
+            heightDegrees = Math.toDegrees(2 * atan(height / 2.0 / SCREEN_DISTANCE)).toFloat()
+            meshTilt = Float.NaN
+        }
+
+        // Built straight ahead and tilted up or down; turned to yawDegrees when drawn. Call on the GL thread.
+        fun build(tiltDegrees: Float) {
+            mesh = screenStrip(spec.curved, widthDegrees, width, height, 0f, tiltDegrees)
+            borderMesh = screenStrip(spec.curved, widthDegrees, width, height, GLOW_MARGIN, tiltDegrees)
             vertexCount = mesh.capacity() / 5
             borderVertexCount = borderMesh.capacity() / 5
+            meshTilt = tiltDegrees
         }
 
         var textureId = 0
@@ -166,6 +204,8 @@ class SceneRenderer(
         val textureMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     }
 
+    // Scratch space for the gap checks, which run while the renderer is constructed
+    private val corner = FloatArray(3)
     val screens = layout.screens.map { Screen(it).apply { place(scale) } }
     // How far each screen may tilt about its own horizontal axis, which keeps it level as the head turns
     // to it, before neighbours come too close; any more pitch tilts the whole arrangement
@@ -188,7 +228,7 @@ class SceneRenderer(
         .asFloatBuffer().put(QUAD).also { it.position(0) }
     private var screenProgram = 0
     private var cursorProgram = 0
-    private var colorProgram = 0
+    private var frameProgram = 0
     private var cursorTextureId = 0
     // Where the wearer was looking when they last recentred; the screens are placed around it
     private var viewReference = Quat.IDENTITY
@@ -211,7 +251,7 @@ class SceneRenderer(
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         screenProgram = buildProgram(TEXTURE_VERTEX_SHADER, SCREEN_FRAGMENT_SHADER)
         cursorProgram = buildProgram(TEXTURE_VERTEX_SHADER, CURSOR_FRAGMENT_SHADER)
-        colorProgram = buildProgram(COLOR_VERTEX_SHADER, COLOR_FRAGMENT_SHADER)
+        frameProgram = buildProgram(TEXTURE_VERTEX_SHADER, FRAME_FRAGMENT_SHADER)
         GLES20.glClearColor(0f, 0f, 0f, 1f)
 
         // The EGL context is preserved across pauses, so textures are only set up once
@@ -268,55 +308,80 @@ class SceneRenderer(
         Matrix.multiplyMM(viewProjection, 0, projection, 0, view, 0)
 
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-        val inputScreens = Session.screens
-        screens.forEachIndexed { i, screen ->
-            // A faint border so an empty screen can still be found (black is see-through on the glasses)
-            setScreenModel(screen)
-            drawColorMesh(screen.borderMesh, screen.borderVertexCount, 0.2f)
-            drawScreenMesh(screen)
-            val input = inputScreens.getOrNull(i)
-            if (input != null && input === Session.activeScreen) drawCursor(screen, input)
+        val ownTilt = ownTilt()
+        for (screen in screens) {
+            if (screen.meshTilt != ownTilt + screen.pitchDegrees) screen.build(ownTilt + screen.pitchDegrees)
         }
+        val inputScreens = Session.screens
+        val active = screens.indices.firstOrNull { inputScreens.getOrNull(it)?.let { input -> input === Session.activeScreen } == true }
+        // Every frame first, so no screen's glow lands on a neighbour's content. The frames also show where
+        // an empty screen is, since black is see-through on the glasses.
+        GLES20.glEnable(GLES20.GL_BLEND)
+        GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE)
+        screens.forEachIndexed { i, screen ->
+            setScreenModel(screen)
+            drawFrame(screen, i == active)
+        }
+        GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        screens.forEachIndexed { i, screen ->
+            setScreenModel(screen)
+            drawScreenMesh(screen)
+        }
+        GLES20.glDisable(GLES20.GL_BLEND)
+        if (active != null) drawCursor(screens[active], inputScreens[active])
         logStats()
     }
 
-    // The screen nearest the centre of view gets the trackpad. Hysteresis stops it flickering when
-    // looking at the gap, and it never changes while a finger is on the trackpad.
+    // The screen being looked at gets the trackpad, or the nearest one when looking between screens. It's
+    // judged by each screen's whole area rather than its centre, so looking at the end of a wide screen
+    // doesn't hand the trackpad to a neighbour. Hysteresis stops it flickering in the gaps, and it never
+    // changes while a finger is on the trackpad.
     private fun updateActiveScreen(head: FloatArray) {
         val inputScreens = Session.screens
         if (inputScreens.size != screens.size || Session.touchActive) return
         // Forward is -Z, so the gaze direction is minus the rotation's third column
         Quat.toMatrix(head, gaze)
         // Measured around the arrangement's own vertical, which tips with it when recentred looking up or down
-        val pitch = Math.toRadians((pitchReferenceDegrees - ownTilt()).toDouble())
-        val towardZ = gaze[10] * cos(pitch) - gaze[9] * sin(pitch)
+        val ownTilt = ownTilt()
+        val tilt = Math.toRadians((pitchReferenceDegrees - ownTilt).toDouble())
+        val towardZ = gaze[10] * cos(tilt) - gaze[9] * sin(tilt)
+        val up = -gaze[9] * cos(tilt) - gaze[10] * sin(tilt)
         val yaw = Math.toDegrees(atan2(gaze[8].toDouble(), towardZ)).toFloat()
+        val pitch = Math.toDegrees(asin(up.coerceIn(-1.0, 1.0))).toFloat()
+        // Angle from the gaze to the edge of a screen, or 0 inside it; each screen's centre sits at its own
+        // pitch plus the tilt the screens take on their own
+        fun distance(i: Int): Float {
+            val screen = screens[i]
+            val across = abs(yaw - screen.yawDegrees) - screen.widthDegrees / 2
+            val up = abs(pitch - screen.pitchDegrees - ownTilt) - screen.heightDegrees / 2
+            return hypot(max(across, 0f), max(up, 0f))
+        }
         val current = inputScreens.indexOfFirst { it === Session.activeScreen }
-        var best = screens.indices.minByOrNull { abs(yaw - screens[it].yawDegrees) } ?: return
-        if (current >= 0 && best != current &&
-            abs(yaw - screens[current].yawDegrees) < abs(yaw - screens[best].yawDegrees) + SWITCH_HYSTERESIS_DEGREES
-        ) {
+        var best = screens.indices.minByOrNull { distance(it) } ?: return
+        if (current >= 0 && best != current && distance(current) < distance(best) + SWITCH_HYSTERESIS_DEGREES) {
             best = current
         }
         Session.activeScreen = inputScreens[best]
     }
 
     // Faces the screens towards the wearer at the recentred height: each screen tilts on its own as far as
-    // its neighbours allow, then the whole arrangement tips as one for the rest
+    // its neighbours allow (built into its mesh, with its own pitch), then the whole arrangement tips as one
+    // for the rest
     private fun placeScreen(screen: Screen) {
-        val ownTilt = ownTilt()
         Matrix.setIdentityM(model, 0)
-        Matrix.rotateM(model, 0, pitchReferenceDegrees - ownTilt, 1f, 0f, 0f)
+        Matrix.rotateM(model, 0, pitchReferenceDegrees - ownTilt(), 1f, 0f, 0f)
         Matrix.rotateM(model, 0, screen.yawDegrees, 0f, 1f, 0f)
-        Matrix.rotateM(model, 0, ownTilt, 1f, 0f, 0f)
     }
 
     private fun ownTilt() = pitchReferenceDegrees.coerceIn(-maxOwnTiltDegrees, maxOwnTiltDegrees)
 
     // Tilting screens that sit side by side brings their top (or bottom) inner corners together, so find
-    // the most tilt that keeps every pair at least MIN_GAP_DEGREES apart
+    // the most tilt that keeps every such pair at least MIN_GAP_DEGREES apart. Screens above or below each
+    // other tilt together and keep their distance.
     private fun maxOwnTilt(): Float {
-        val pairs = screens.sortedBy { it.yawDegrees }.zipWithNext()
+        val byYaw = screens.sortedBy { it.yawDegrees }
+        val pairs = byYaw.indices.flatMap { i -> (i + 1 until byYaw.size).map { byYaw[i] to byYaw[it] } }
+            .filter { (a, b) -> abs(a.pitchDegrees - b.pitchDegrees) < (a.heightDegrees + b.heightDegrees) / 2 }
         if (pairs.isEmpty()) return 90f
         var clear = 0f
         var blocked = 90f
@@ -332,23 +397,19 @@ class SceneRenderer(
     // vertical plane midway between them
     private fun gapDegrees(right: Screen, left: Screen, tilt: Float): Float {
         val midYaw = (right.yawDegrees + left.yawDegrees) / 2f
-        // The border strip runs from the screen's left edge (first two vertices) to its right edge (last two)
-        val last = left.borderVertexCount - 2
-        val rightClearance = listOf(0, 1).minOf { clearance(right.borderMesh, it, right.yawDegrees - midYaw, tilt) }
-        val leftClearance = listOf(last, last + 1).minOf { clearance(left.borderMesh, it, left.yawDegrees - midYaw, tilt) }
+        // The right-hand screen's left edge faces the left-hand screen's right edge
+        val rightClearance = listOf(0f, 1f).minOf { v -> clearance(right, 0f, v, right.yawDegrees - midYaw, tilt + right.pitchDegrees) }
+        val leftClearance = listOf(0f, 1f).minOf { v -> clearance(left, 1f, v, left.yawDegrees - midYaw, tilt + left.pitchDegrees) }
         return rightClearance + leftClearance
     }
 
-    // How far a vertex sits on its own screen's side of the midway plane, in degrees, once the screen is
-    // tilted and turned to its yaw relative to that plane (positive yaw is to the left)
-    private fun clearance(mesh: FloatBuffer, vertex: Int, yawDegrees: Float, tilt: Float): Float {
-        val x = mesh.get(vertex * 5)
-        val y = mesh.get(vertex * 5 + 1)
-        val z = mesh.get(vertex * 5 + 2)
-        val t = Math.toRadians(tilt.toDouble())
+    // How far a corner of a screen's border sits on its own side of the midway plane, in degrees, once the
+    // screen is tilted and turned to its yaw relative to that plane (positive yaw is to the left)
+    private fun clearance(screen: Screen, u: Float, v: Float, yawDegrees: Float, tilt: Float): Float {
+        ScreenGeometry.point(screen.spec.curved, screen.widthDegrees, screen.width, screen.height, BORDER_MARGIN, tilt, u, v, corner)
+        val (x, y, z) = corner
         val r = Math.toRadians(yawDegrees.toDouble())
-        val tiltedZ = y * sin(t) + z * cos(t)
-        val turnedX = x * cos(r) + tiltedZ * sin(r)
+        val turnedX = x * cos(r) + z * sin(r)
         val side = asin(turnedX / sqrt(x * x + y * y + z * z)) * if (yawDegrees > 0) -1.0 else 1.0
         return Math.toDegrees(side).toFloat()
     }
@@ -358,12 +419,19 @@ class SceneRenderer(
         Matrix.multiplyMM(mvp, 0, viewProjection, 0, model, 0)
     }
 
-    private fun drawColorMesh(mesh: FloatBuffer, vertexCount: Int, grey: Float) {
-        GLES20.glUseProgram(colorProgram)
-        GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(colorProgram, "uMvp"), 1, false, mvp, 0)
-        GLES20.glUniform4f(GLES20.glGetUniformLocation(colorProgram, "uColor"), grey, grey, grey, 1f)
-        bindMesh(colorProgram, mesh, withTexCoords = false)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, vertexCount)
+    private fun drawFrame(screen: Screen, active: Boolean) {
+        GLES20.glUseProgram(frameProgram)
+        GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(frameProgram, "uMvp"), 1, false, mvp, 0)
+        GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(frameProgram, "uTexMatrix"), 1, false, IDENTITY, 0)
+        GLES20.glUniform2f(GLES20.glGetUniformLocation(frameProgram, "uSize"), screen.spec.widthPx.toFloat(), screen.spec.heightPx.toFloat())
+        // The glow strip's margin in the screen's own pixels
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(frameProgram, "uMargin"), GLOW_MARGIN / screen.width * screen.spec.widthPx)
+        val rim = if (active) ACTIVE_RIM_COLOR else RIM_COLOR
+        GLES20.glUniform3f(GLES20.glGetUniformLocation(frameProgram, "uRim"), rim[0], rim[1], rim[2])
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(frameProgram, "uGlow"), GLOW_STRENGTH)
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(frameProgram, "uFalloff"), GLOW_FALLOFF_PX)
+        bindMesh(frameProgram, screen.borderMesh, withTexCoords = true)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, screen.borderVertexCount)
     }
 
     private fun drawScreenMesh(screen: Screen) {
@@ -373,6 +441,7 @@ class SceneRenderer(
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, screen.textureId)
         GLES20.glUniform1i(GLES20.glGetUniformLocation(screenProgram, "uTexture"), 0)
+        GLES20.glUniform2f(GLES20.glGetUniformLocation(screenProgram, "uSize"), screen.spec.widthPx.toFloat(), screen.spec.heightPx.toFloat())
         bindMesh(screenProgram, screen.mesh, withTexCoords = true)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, screen.vertexCount)
     }
@@ -383,11 +452,14 @@ class SceneRenderer(
         val u = input.cursorX / input.width
         val y = screen.height / 2f - input.cursorY / input.height * screen.height
         val half = CURSOR_SIZE_PX * screen.height / input.height / 2f
+        // Tilted as the screen's mesh is
         placeScreen(screen)
         if (screen.spec.curved) {
+            Matrix.rotateM(model, 0, screen.meshTilt, 1f, 0f, 0f)
             Matrix.rotateM(model, 0, screen.widthDegrees / 2f - u * screen.widthDegrees, 0f, 1f, 0f)
             Matrix.translateM(model, 0, half, y - half, -SCREEN_DISTANCE * 0.995f)
         } else {
+            Matrix.rotateM(model, 0, screen.meshTilt, 1f, 0f, 0f)
             Matrix.translateM(model, 0, (u - 0.5f) * screen.width + half, y - half, -SCREEN_DISTANCE * 0.995f)
         }
         Matrix.scaleM(model, 0, half, half, 1f)

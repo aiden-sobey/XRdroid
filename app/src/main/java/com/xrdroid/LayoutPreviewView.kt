@@ -13,8 +13,9 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
-// Top-down sketch of a screen layout: the wearer at the bottom, their field of view as a faint wedge,
-// and each screen as an arc around them
+// Sketch of a screen layout. Built-in layouts are seen from above: the wearer at the bottom, their field
+// of view as a faint wedge, and each screen as an arc around them. Custom layouts can have screens above
+// and below each other, so they're seen from the front, around the recentre point.
 class LayoutPreviewView @JvmOverloads constructor(context: Context, attrs: AttributeSet? = null) : View(context, attrs) {
 
     companion object {
@@ -47,9 +48,49 @@ class LayoutPreviewView @JvmOverloads constructor(context: Context, attrs: Attri
     private val wearerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val arcBounds = RectF()
     private val fieldPath = Path()
+    private val screenRect = RectF()
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (layout.custom) drawFront(canvas) else drawTopDown(canvas)
+    }
+
+    // Each screen as a rectangle, scaled so the whole layout and the recentre point fit
+    private fun drawFront(canvas: Canvas) {
+        val color = if (highlighted) accent else muted
+        val screens = layout.screens
+        var left = 0f
+        var right = 0f
+        var top = 0f
+        var bottom = 0f
+        for (screen in screens) {
+            left = maxOf(left, screen.yawDegrees + screen.widthDegrees / 2)
+            right = minOf(right, screen.yawDegrees - screen.widthDegrees / 2)
+            top = maxOf(top, screen.pitchDegrees + screen.heightDegrees / 2)
+            bottom = minOf(bottom, screen.pitchDegrees - screen.heightDegrees / 2)
+        }
+        val pad = 4 * density
+        val scale = min((width - 2 * pad) / (left - right), (height - 2 * pad) / (top - bottom))
+        // Centred on the layout, with positive yaw (left) towards the left of the view
+        val originX = width / 2f + (left + right) / 2 * scale
+        val originY = height / 2f + (top + bottom) / 2 * scale
+        fieldPaint.color = Color.argb(60, Color.red(color), Color.green(color), Color.blue(color))
+        screenPaint.color = color
+        screenPaint.strokeWidth = 1.5f * density
+        for (screen in screens) {
+            screenRect.set(
+                originX - (screen.yawDegrees + screen.widthDegrees / 2) * scale, originY - (screen.pitchDegrees + screen.heightDegrees / 2) * scale,
+                originX - (screen.yawDegrees - screen.widthDegrees / 2) * scale, originY - (screen.pitchDegrees - screen.heightDegrees / 2) * scale
+            )
+            canvas.drawRoundRect(screenRect, 2 * density, 2 * density, fieldPaint)
+            canvas.drawRoundRect(screenRect, 2 * density, 2 * density, screenPaint)
+        }
+        wearerPaint.color = color
+        canvas.drawCircle(originX, originY, 3 * density, wearerPaint)
+    }
+
+    private fun drawTopDown(canvas: Canvas) {
+        screenPaint.strokeWidth = 5 * density
         val centerX = width / 2f
         val centerY = height - 6 * density
         val radius = min(width / 2f - 6 * density, height - 14 * density)

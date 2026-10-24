@@ -65,6 +65,8 @@ class MainActivity : AppCompatActivity() {
         // Longest side of the saved background photo, about the widest spatial screen
         private const val MAX_BACKGROUND_PX = 2560
         private const val THUMBNAIL_PX = 200
+        // Preset pictures are 2560 wide, so this gives thumbnails a little over THUMBNAIL_PX
+        private const val THUMBNAIL_SAMPLE = 8
         private const val SETUP_POLL_MS = 1500L
         // The glasses' display normally starts within a second or two of their USB connection
         private const val REPLUG_AFTER_MS = 4000L
@@ -76,6 +78,7 @@ class MainActivity : AppCompatActivity() {
         val title: TextView = view.findViewById(R.id.check_title)
         val detail: TextView = view.findViewById(R.id.check_detail)
         val action: MaterialButton = view.findViewById(R.id.check_action)
+        var ok = false
     }
 
     private lateinit var displayManager: DisplayManager
@@ -84,8 +87,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var hint: TextView
     private lateinit var shizukuCheck: Check
     private lateinit var headTrackingCheck: Check
+    private lateinit var setupCard: View
+    private lateinit var setupDone: View
     private val layoutCards = mutableListOf<Pair<ScreenLayout, MaterialCardView>>()
     private val backgroundItems = mutableListOf<Pair<HomeBackground, View>>()
+    private val backgroundThumbnails = mutableMapOf<HomeBackground, Bitmap?>()
     private val pickPhoto = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         // Null when the picker was closed, or couldn't fetch the photo itself
         Log.i(TAG, "Photo picker returned ${uri ?: "nothing"}")
@@ -100,6 +106,8 @@ class MainActivity : AppCompatActivity() {
     }
     private val handler = Handler(Looper.getMainLooper())
     private var launchedOnDisplay = -1
+    // The layout the screens were last built with, to rebuild them when it's switched or edited
+    private var appliedLayout = ""
     // When the glasses appeared on USB without their display, or 0
     private var displayMissingSince = 0L
     private var replugPrompt: AlertDialog? = null
@@ -165,6 +173,9 @@ class MainActivity : AppCompatActivity() {
         // Coming back to this screen also brings the spatial screens back to the front of the glasses
         launchedOnDisplay = -1
         scheduleStart()
+        // The layout editor may have added, changed, picked or deleted a layout
+        showLayouts()
+        applyLayoutIfChanged()
         handler.post(setupPoll)
     }
 
@@ -220,19 +231,36 @@ class MainActivity : AppCompatActivity() {
         }
         shizukuCheck = addCheck()
         headTrackingCheck = addCheck()
+        setupCard = findViewById(R.id.setup_card)
+        setupDone = findViewById(R.id.setup_done)
 
+        findViewById<View>(R.id.new_layout).setOnClickListener { startActivity(Intent(this, LayoutEditorActivity::class.java)) }
+        appliedLayout = ScreenLayout.saved(this).signature
+        showLayouts()
+        setUpBackgrounds()
+    }
+
+    // The built-in layouts and the wearer's own, which can be edited
+    private fun showLayouts() {
         val layouts = findViewById<LinearLayout>(R.id.layouts)
-        for (layout in ScreenLayout.entries) {
+        layouts.removeAllViews()
+        layoutCards.clear()
+        for (layout in ScreenLayout.all(this)) {
             val card = layoutInflater.inflate(R.layout.item_layout, layouts, false) as MaterialCardView
             card.findViewById<LayoutPreviewView>(R.id.layout_preview).layout = layout
             card.findViewById<TextView>(R.id.layout_title).text = layout.title
             card.findViewById<TextView>(R.id.layout_description).text = layout.description
             card.setOnClickListener { selectLayout(layout) }
+            card.findViewById<View>(R.id.layout_edit).apply {
+                isVisible = layout.custom
+                setOnClickListener {
+                    startActivity(Intent(this@MainActivity, LayoutEditorActivity::class.java).putExtra(LayoutEditorActivity.EXTRA_LAYOUT_ID, layout.id))
+                }
+            }
             layouts.addView(card)
             layoutCards += layout to card
         }
         showSelectedLayout()
-        setUpBackgrounds()
     }
 
     private fun setUpBackgrounds() {
@@ -283,6 +311,11 @@ class MainActivity : AppCompatActivity() {
                     preview.setImageDrawable(null)
                     icon.setImageResource(R.drawable.ic_closer)
                 }
+                option.hasPicture -> {
+                    // A small copy is quick to decode, and kept for later refreshes
+                    preview.setImageBitmap(backgroundThumbnails.getOrPut(option) { option.picture(this, THUMBNAIL_SAMPLE) })
+                    icon.setImageDrawable(null)
+                }
                 else -> {
                     preview.setImageDrawable(option.gradient())
                     icon.setImageDrawable(null)
@@ -325,6 +358,13 @@ class MainActivity : AppCompatActivity() {
         if (layout == ScreenLayout.saved(this)) return
         ScreenLayout.save(this, layout)
         showSelectedLayout()
+        applyLayoutIfChanged()
+    }
+
+    private fun applyLayoutIfChanged() {
+        val layout = ScreenLayout.saved(this).signature
+        if (layout == appliedLayout) return
+        appliedLayout = layout
         if (Session.running) rebuildScreens()
     }
 
@@ -369,7 +409,7 @@ class MainActivity : AppCompatActivity() {
         connection.setCompoundDrawablesRelativeWithIntrinsicBounds(GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(dotColor)
-            setSize(dp(8), dp(8))
+            setSize(dp(7), dp(7))
         }, null, null, null)
         connection.background = GradientDrawable().apply {
             setColor(ContextCompat.getColor(this@MainActivity, R.color.surface_high))
@@ -406,6 +446,10 @@ class MainActivity : AppCompatActivity() {
             }
             else -> show(headTrackingCheck, "Head tracking", "Reading the glasses' motion sensor", ok = true)
         }
+        // Once everything is working, Setup shrinks to a tick
+        val allOk = shizukuCheck.ok && headTrackingCheck.ok
+        setupCard.isVisible = !allOk
+        setupDone.isVisible = allOk
     }
 
     // Shown once each time it happens, and closed by itself once the display starts
@@ -425,6 +469,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun show(check: Check, title: String, detail: String, ok: Boolean, actionLabel: String? = null, action: (() -> Unit)? = null) {
+        check.ok = ok
         check.title.text = title
         check.detail.text = detail
         check.icon.setImageResource(if (ok) R.drawable.ic_ok else R.drawable.ic_attention)

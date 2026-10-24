@@ -16,28 +16,20 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/further"
-            style="@style/Widget.Material3.Button.TonalButton.Icon"
-            android:layout_width="56dp"
+            style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:contentDescription="Push the screens back"
-            android:insetLeft="0dp"
-            android:insetRight="0dp"
-            app:icon="@drawable/ic_further"
-            app:iconGravity="textStart"
-            app:iconPadding="0dp" />
+            app:icon="@drawable/ic_further" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/closer"
-            style="@style/Widget.Material3.Button.TonalButton.Icon"
-            android:layout_width="56dp"
+            style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
+            android:layout_marginStart="4dp"
             android:contentDescription="Bring the screens closer"
-            android:insetLeft="0dp"
-            android:insetRight="0dp"
-            app:icon="@drawable/ic_closer"
-            app:iconGravity="textStart"
-            app:iconPadding="0dp" />
+            app:icon="@drawable/ic_closer" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/recenter"
@@ -88,11 +80,14 @@
             android:layout_height="72dp"
             android:layout_marginEnd="6dp"
             android:layout_weight="1"
-            android:text="Back"
-            android:textAppearance="?attr/textAppearanceTitleMedium"
+            android:contentDescription="Back"
+            android:paddingStart="0dp"
+            android:paddingEnd="0dp"
             app:cornerRadius="22dp"
             app:icon="@drawable/ic_back"
-            app:iconGravity="textStart" />
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            app:iconSize="28dp" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/home"
@@ -101,10 +96,13 @@
             android:layout_height="72dp"
             android:layout_marginStart="6dp"
             android:layout_weight="1"
-            android:text="Home"
-            android:textAppearance="?attr/textAppearanceTitleMedium"
+            android:contentDescription="Home"
+            android:paddingStart="0dp"
+            android:paddingEnd="0dp"
             app:cornerRadius="22dp"
             app:icon="@drawable/ic_home"
-            app:iconGravity="textStart" />
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            app:iconSize="28dp" />
     </LinearLayout>
 </LinearLayout>

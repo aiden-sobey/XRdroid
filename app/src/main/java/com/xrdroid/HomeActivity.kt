@@ -102,14 +102,14 @@ class HomeActivity : AppCompatActivity() {
     fun applyBackground() {
         val chosen = HomeBackground.saved(this)
         scrim.isVisible = chosen == HomeBackground.PHOTO
-        if (chosen != HomeBackground.PHOTO) {
+        if (chosen != HomeBackground.PHOTO && !chosen.hasPicture) {
             background.setImageDrawable(chosen.gradient())
             return
         }
-        val file = HomeBackground.photoFile(this)
         thread(name = "HomeBackground") {
-            val bitmap = BitmapFactory.decodeFile(file.path)
-            runOnUiThread { if (!isDestroyed) background.setImageBitmap(bitmap) }
+            val bitmap = if (chosen == HomeBackground.PHOTO) BitmapFactory.decodeFile(HomeBackground.photoFile(this).path) else chosen.picture(this)
+            // Unless another background was chosen meanwhile
+            runOnUiThread { if (!isDestroyed && HomeBackground.saved(this) == chosen) background.setImageBitmap(bitmap) }
         }
     }
 

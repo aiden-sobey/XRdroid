@@ -13,29 +13,29 @@
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingStart="24dp"
-        android:paddingTop="20dp"
-        android:paddingEnd="20dp"
-        android:paddingBottom="12dp">
+        android:paddingTop="10dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="6dp">
 
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="@string/app_name"
-            android:textAppearance="?attr/textAppearanceHeadlineSmall"
+            android:textAppearance="?attr/textAppearanceTitleLarge"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/connection"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:drawablePadding="8dp"
+            android:drawablePadding="6dp"
             android:gravity="center_vertical"
-            android:paddingStart="12dp"
-            android:paddingTop="6dp"
-            android:paddingEnd="14dp"
-            android:paddingBottom="6dp"
-            android:textAppearance="?attr/textAppearanceLabelLarge" />
+            android:paddingStart="10dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="4dp"
+            android:textAppearance="?attr/textAppearanceLabelMedium" />
     </LinearLayout>
 
     <FrameLayout
@@ -53,9 +53,12 @@
             android:visibility="gone" />
     </FrameLayout>
 
+    <!-- Shorter than the standard 80dp bar -->
     <com.google.android.material.bottomnavigation.BottomNavigationView
         android:id="@+id/nav"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="64dp"
+        app:itemPaddingBottom="6dp"
+        app:itemPaddingTop="6dp"
         app:menu="@menu/nav" />
 </LinearLayout>

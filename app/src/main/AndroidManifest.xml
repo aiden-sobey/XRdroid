@@ -41,6 +41,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Makes and changes the wearer's own screen layouts -->
+        <activity
+            android:name=".LayoutEditorActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- The view on the glasses. Exported so it can be launched on the glasses display over adb. Its
              own single-instance task, so relaunching never stacks a second copy. -->
         <activity

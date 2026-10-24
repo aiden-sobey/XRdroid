@@ -1,9 +1,11 @@
 package com.xrdroid
 
 import android.content.Context
+import kotlin.math.atan
+import kotlin.math.tan
 
-// A screen in a layout: where it sits around the wearer (positive yaw is to the left), how wide it
-// appears, its resolution, and whether it wraps around the wearer or is a flat panel facing them.
+// A screen in a layout: where it sits around the wearer (positive yaw is to the left, positive pitch is up),
+// how wide it appears, its resolution, and whether it wraps around the wearer or is a flat panel facing them.
 // Sizes keep roughly one screen pixel per glasses pixel (about 42 per degree).
 data class ScreenSpec(
     val name: String,
@@ -12,28 +14,27 @@ data class ScreenSpec(
     val widthPx: Int,
     val heightPx: Int,
     val densityDpi: Int,
-    val curved: Boolean = false
-)
+    val curved: Boolean = false,
+    val pitchDegrees: Float = 0f
+) {
+    // How tall the screen appears, from its width and pixel shape, as the renderer builds it
+    val heightDegrees: Float
+        get() {
+            val halfWidth = Math.toRadians(widthDegrees / 2.0)
+            val width = if (curved) 2 * halfWidth else 2 * tan(halfWidth)
+            return Math.toDegrees(2 * atan(width * heightPx / widthPx / 2)).toFloat()
+        }
+}
 
-enum class ScreenLayout(val title: String, val description: String, val screens: List<ScreenSpec>) {
-    SINGLE(
-        "Single screen",
-        "One 16:9 screen straight ahead",
-        listOf(ScreenSpec("Screen", 0f, 44f, 1920, 1080, 240))
-    ),
-    DUAL(
-        "Dual screens",
-        "Two screens side by side. Look left or right to switch between them.",
-        listOf(
-            ScreenSpec("Left screen", 22f, 40f, 1600, 900, 200),
-            ScreenSpec("Right screen", -22f, 40f, 1600, 900, 200)
-        )
-    ),
-    ULTRAWIDE(
-        "Ultrawide",
-        "One curved 21:9 screen that wraps around you",
-        listOf(ScreenSpec("Ultrawide screen", 0f, 62f, 2560, 1080, 240, curved = true))
-    );
+// A set of screens: one of the built-in layouts, or one the wearer made in the layout editor
+class ScreenLayout(val id: String, val title: String, val description: String, val screens: List<ScreenSpec>, val custom: Boolean = false) {
+
+    override fun equals(other: Any?) = other is ScreenLayout && other.id == id
+    override fun hashCode() = id.hashCode()
+    override fun toString() = id
+
+    // Changes whenever the screens would be built differently
+    val signature get() = id + screens
 
     companion object {
         private const val PREFS = "settings"
@@ -43,13 +44,34 @@ enum class ScreenLayout(val title: String, val description: String, val screens:
         const val MIN_SCALE = 0.6f
         const val MAX_SCALE = 1.6f
 
+        val SINGLE = ScreenLayout(
+            "SINGLE", "Single screen", "One 16:9 screen straight ahead",
+            listOf(ScreenSpec("Screen", 0f, 44f, 1920, 1080, 240))
+        )
+        val DUAL = ScreenLayout(
+            "DUAL", "Dual screens", "Two screens side by side",
+            listOf(
+                ScreenSpec("Left screen", 22f, 40f, 1600, 900, 200),
+                ScreenSpec("Right screen", -22f, 40f, 1600, 900, 200)
+            )
+        )
+        val ULTRAWIDE = ScreenLayout(
+            "ULTRAWIDE", "Ultrawide", "One curved 21:9 screen",
+            listOf(ScreenSpec("Ultrawide screen", 0f, 62f, 2560, 1080, 240, curved = true))
+        )
+        val BUILT_IN = listOf(SINGLE, DUAL, ULTRAWIDE)
+
+        fun all(context: Context) = BUILT_IN + CustomLayouts.load(context).map { it.toScreenLayout() }
+
         fun saved(context: Context): ScreenLayout {
-            val name = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_LAYOUT, null)
-            return entries.firstOrNull { it.name == name } ?: DUAL
+            val id = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_LAYOUT, null)
+            return all(context).firstOrNull { it.id == id } ?: DUAL
         }
 
-        fun save(context: Context, layout: ScreenLayout) {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_LAYOUT, layout.name).apply()
+        fun save(context: Context, layout: ScreenLayout) = select(context, layout.id)
+
+        fun select(context: Context, id: String) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_LAYOUT, id).apply()
         }
 
         fun savedScale(context: Context) =
