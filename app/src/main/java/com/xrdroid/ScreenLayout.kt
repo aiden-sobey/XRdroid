@@ -66,7 +66,7 @@ class ScreenLayout(val id: String, val title: String, val description: String, v
 
         fun saved(context: Context): ScreenLayout {
             val id = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_LAYOUT, null)
-            return all(context).firstOrNull { it.id == id } ?: DUAL
+            return all(context).firstOrNull { it.id == id } ?: SINGLE
         }
 
         fun save(context: Context, layout: ScreenLayout) = select(context, layout.id)
@@ -75,8 +75,8 @@ class ScreenLayout(val id: String, val title: String, val description: String, v
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_LAYOUT, id).apply()
         }
 
-        // A single screen can follow the head instead of staying put in the room
-        fun savedFixed(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_FIXED, false)
+        // A single screen can follow the head instead of staying put in the room. Fixed by default.
+        fun savedFixed(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_FIXED, true)
 
         fun saveFixed(context: Context, fixed: Boolean) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_FIXED, fixed).apply()
